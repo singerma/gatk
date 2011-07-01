@@ -480,6 +480,7 @@ public class VariantContextUtils {
         Map<String, Object> attributes = new TreeMap<String, Object>();
         Set<Map.Entry<String, Object>> infoSet = new HashSet<Map.Entry<String, Object>>();
         infoSet.addAll(first.getAttributes().entrySet());
+        String qualityOfSources = "";
         String rsID = null;
         int depth = 0;
         int maxAC = -1;
@@ -546,12 +547,18 @@ public class VariantContextUtils {
             }
             // take intersection of info
             infoSet.retainAll(vc.getAttributes().entrySet());
+
+            //keep track of quality measure from different sources
+            qualityOfSources += "," + vc.getSource() + ":" + (vc.isVariant() ? vc.getPhredScaledQual() : -1);
         }
 
         // add info to the attributes
         for (Map.Entry<String, Object> p : infoSet) {
             attributes.put(p.getKey(), p.getValue());
         }
+
+        // add source quality to attributes
+        attributes.put("Quality", qualityOfSources.substring(1));
 
         // take the VC with the maxAC and pull the attributes into a modifiable map
         if ( mergeInfoWithMaxAC && vcWithMaxAC != null ) {
