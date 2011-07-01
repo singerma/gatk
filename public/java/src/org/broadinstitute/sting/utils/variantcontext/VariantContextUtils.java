@@ -478,7 +478,8 @@ public class VariantContextUtils {
         double negLog10PError = -1;
         Set<String> filters = new TreeSet<String>();
         Map<String, Object> attributes = new TreeMap<String, Object>();
-        Set<String> inconsistentAttributes = new HashSet<String>();
+        Set<Map.Entry<String, Object>> infoSet = new HashSet<Map.Entry<String, Object>>();
+        infoSet.addAll(first.getAttributes().entrySet());
         String rsID = null;
         int depth = 0;
         int maxAC = -1;
@@ -543,26 +544,13 @@ public class VariantContextUtils {
                     }
                 }
             }
+            // take intersection of info
+            infoSet.retainAll(vc.getAttributes().entrySet());
+        }
 
-            for (Map.Entry<String, Object> p : vc.getAttributes().entrySet()) {
-                String key = p.getKey();
-                // if we don't like the key already, don't go anywhere
-                if ( ! inconsistentAttributes.contains(key) ) {
-                    boolean alreadyFound = attributes.containsKey(key);
-                    Object boundValue = attributes.get(key);
-                    boolean boundIsMissingValue = alreadyFound && boundValue.equals(VCFConstants.MISSING_VALUE_v4);
-
-                    if ( alreadyFound && ! boundValue.equals(p.getValue()) && ! boundIsMissingValue ) {
-                        // we found the value but we're inconsistent, put it in the exclude list
-                        //System.out.printf("Inconsistent INFO values: %s => %s and %s%n", key, boundValue, p.getValue());
-                        inconsistentAttributes.add(key);
-                        attributes.remove(key);
-                    } else if ( ! alreadyFound || boundIsMissingValue )  { // no value
-                        //if ( vc != first ) System.out.printf("Adding key %s => %s%n", p.getKey(), p.getValue());
-                        attributes.put(key, p.getValue());
-                    }
-                }
-            }
+        // add info to the attributes
+        for (Map.Entry<String, Object> p : infoSet) {
+            attributes.put(p.getKey(), p.getValue());
         }
 
         // take the VC with the maxAC and pull the attributes into a modifiable map
