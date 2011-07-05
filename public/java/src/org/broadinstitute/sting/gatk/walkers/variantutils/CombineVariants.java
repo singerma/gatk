@@ -85,7 +85,7 @@ public class CombineVariants extends RodWalker<Integer, Integer> {
     public boolean ASSUME_IDENTICAL_SAMPLES = false;
 
     @Argument(fullName="minimumN", shortName="minN", doc="Combine variants and output site only if variant is present in at least N input files.", required=false)
-    public int minimumN = 1;
+    public int minimumN = 0;
 
     @Hidden
     @Argument(fullName="masterMerge", shortName="master", doc="Master merge mode -- experts only.  You need to look at the code to understand it", required=false)
@@ -170,7 +170,7 @@ public class CombineVariants extends RodWalker<Integer, Integer> {
                 numFilteredRecords++;
         }
 
-        if (minimumN > 1 && (vcs.size() - numFilteredRecords < minimumN))
+        if (vcs.size() - numFilteredRecords < minimumN)
             return 0;
         
         VariantContext mergedVC;
