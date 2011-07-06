@@ -468,6 +468,9 @@ public class VariantContextUtils {
         if ( VCs.size() == 0 ) // everything is filtered out and we're filteredareUncalled
             return null;
 
+        if ( VCs.size() != priorityListOfVCs.size() ) // ignore if this call is not made by all files
+            return null;
+        
         // establish the baseline info from the first VC
         VariantContext first = VCs.get(0);
         String name = first.getSource();
