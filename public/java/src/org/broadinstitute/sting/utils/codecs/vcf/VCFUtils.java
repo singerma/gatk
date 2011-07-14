@@ -137,7 +137,8 @@ public class VCFUtils {
                     else if ( ! line.getClass().equals(other.getClass()) )
                         throw new IllegalStateException("Incompatible header types: " + line + " " + other );
                     else if ( line instanceof VCFFilterHeaderLine) {
-                        String lineName = ((VCFFilterHeaderLine) line).getName();                                                                                                         String otherName = ((VCFFilterHeaderLine) other).getName();
+                        String lineName = ((VCFFilterHeaderLine) line).getName();
+                        String otherName = ((VCFFilterHeaderLine) other).getName();
                         if ( ! lineName.equals(otherName) )
                             throw new IllegalStateException("Incompatible header types: " + line + " " + other );
                     } else if ( line instanceof VCFCompoundHeaderLine ) {

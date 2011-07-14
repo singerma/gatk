@@ -482,6 +482,7 @@ public class VariantContextUtils {
         Set<String> filters = new TreeSet<String>();
         Map<String, Object> attributes = new TreeMap<String, Object>();
         Set<Map.Entry<String, Object>> infoSet = new HashSet<Map.Entry<String, Object>>();
+        // WARNING: this assumes that the Object has a proper hashCode, should be alright as the object is usually String
         infoSet.addAll(first.getAttributes().entrySet());
         String qualityOfSources = "";
         String rsID = null;
