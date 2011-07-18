@@ -166,7 +166,7 @@ public class VCFUtils {
                                 throw new IllegalStateException("Incompatible header types, collision between these two types: " + line + " " + other );
                             }
                         }
-                        if ( ! compLine.getDescription().equals(compOther) )
+                        if ( ! compLine.getDescription().equals(compOther.getDescription()) )
                             if ( logger != null ) logger.warn("Allowing unequal description fields through: keeping " + compOther + " excluding " + compLine);
                     } else {
                         // we are not equal, but we're not anything special either
