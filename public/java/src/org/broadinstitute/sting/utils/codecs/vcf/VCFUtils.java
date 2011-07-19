@@ -313,7 +313,7 @@ public class VCFUtils {
                 } else if(key.equals("SAMPLE")) {
                     String sampleValue = insertCenter(line.getValue(), name);
                     String sampleKey = parseID(line.getValue()) + "." + name;
-                    sampleMap.put(sampleKey, new VCFHeaderLine(sampleKey, sampleValue));
+                    sampleMap.put(sampleKey, new VCFHeaderLine(key, sampleValue));
                 } else {
                     if(map.containsKey(key)) {
                         VCFHeaderLine other = map.get(key);
