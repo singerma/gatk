@@ -56,6 +56,13 @@ public abstract class VCFCompoundHeaderLine extends VCFHeaderLine implements VCF
     //
     public void setNumberToUnbounded() { this.count = UNBOUNDED; }
 
+    public void promoteIntToFloat() {
+        if(this.type == VCFHeaderLineType.Integer)
+            this.type = VCFHeaderLineType.Float;
+        else
+            throw new IllegalStateException("Tried to promote non-Integer to Float");
+    }
+
     // our type of line, i.e. format, info, etc
     private final SupportedHeaderLineType lineType;
 

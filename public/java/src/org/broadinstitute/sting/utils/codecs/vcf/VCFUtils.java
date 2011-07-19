@@ -116,7 +116,7 @@ public class VCFUtils {
         return fields;
     }
 
-    
+
 
     public static Set<VCFHeaderLine> smartMergeHeaders(Collection<VCFHeader> headers, Logger logger) throws IllegalStateException {
         HashMap<String, VCFHeaderLine> map = new HashMap<String, VCFHeaderLine>(); // from KEY.NAME -> line
@@ -180,6 +180,164 @@ public class VCFUtils {
         }
 
         return new HashSet<VCFHeaderLine>(map.values());
+    }
+
+    /**
+     * Merges what is believed to be a CompoundHeaderLine(from INFO or FORMAT) into pre-existing entry
+     *
+     * @param map       the map to store the VCFHeaderLine in
+     * @param key       the key formatted to be based on the id
+     * @param line      the line that needs to be merged in
+     * @param logger    logger to hold warning
+     */
+    private static void mergeCompoundHeaderLine(Map<String, VCFHeaderLine> map, String key, VCFHeaderLine line, Logger logger) throws IllegalStateException {
+        VCFHeaderLine other = map.get(key);
+        if(line.equals(other))
+            return;
+        if(!line.getClass().equals(other.getClass()))
+            throw new IllegalStateException("Incompatible header types: " + line + " " + other);
+        if(!(line instanceof VCFCompoundHeaderLine))
+            throw new IllegalStateException("Expected VCFCompoundHeaderLine: " + line);
+
+        VCFCompoundHeaderLine compLine = (VCFCompoundHeaderLine)line;
+        VCFCompoundHeaderLine compOther = (VCFCompoundHeaderLine)other;
+
+        if(compLine.getCount() != compOther.getCount()) {
+            if ( logger != null ) logger.warn("Promoting header field Number to . due to number differences in header lines: " + line + " " + other);
+            compOther.setNumberToUnbounded();
+        }
+
+        if (compLine.getType() != (compOther.getType())) {
+            if ( compLine.getType() == VCFHeaderLineType.Integer && compOther.getType() == VCFHeaderLineType.Float ) {
+                if ( logger != null ) logger.warn("1Promoting Integer to Float in header: " + compLine);
+            } else if ( compLine.getType() == VCFHeaderLineType.Float && compOther.getType() == VCFHeaderLineType.Integer ) {
+                if ( logger != null ) logger.warn("2Promoting Integer to Float in header: " + compOther);
+                compOther.promoteIntToFloat();
+            } else {
+                throw new IllegalStateException("Incompatible header types, collision between these two types: " + line + " " + other );
+            }
+        }
+
+        if (!compLine.getDescription().equals(compOther.getDescription()))
+            if ( logger != null ) logger.warn("Allowing unequal description fields through: keeping " + compOther + " excluding " + compLine);
+
+    }
+
+    /**
+     * Parses the ID out of the value of a "SAMPLE" VCFHeaderLine
+     *
+     * @param sampleString  the value of a "SAMPLE" VCFHeaderLine
+     * @return              the ID field
+     */
+
+    private static String parseID(String sampleString) {
+        int equalPos = sampleString.indexOf('=');
+        int commaPos = sampleString.indexOf(',');
+        return sampleString.substring(equalPos+1,commaPos);
+    }
+
+    /**
+     * Inserts center with a . immediately after the first fields value (should be ID)
+     *
+     * @param sampleString  the value of a "SAMPLE" VCFHeaderLine
+     * @param center        the name of the center
+     * @return              a string such that ID=name becomes ID=name.center
+     */
+    private static String insertCenter(String sampleString, String center){
+        return sampleString.replaceFirst(",", "." + center+ ",");
+    }
+
+    /**
+     * Merges headers in a way more compliant with TCGA specifications, based on smartMergeHeaders
+     *
+     * This, and the associated functions above are probably too special cased and could use refactoring for
+     * readability and reusability
+     *
+     * @param vcfRods   full rod list which includes the rod names
+     * @param logger    logger to hold warnings
+     * @return          set containing all the headers of the merged VCF
+     * @throws IllegalStateException    generic exception if anything goes wrong
+     */
+    public static Set<VCFHeaderLine> tcgaMergeHeaders(Map<String, VCFHeader> vcfRods, Logger logger) throws IllegalStateException {
+        HashMap<String, VCFHeaderLine> map = new HashMap<String, VCFHeaderLine>();
+        HashMap<String, VCFHeaderLine> infoMap = new HashMap<String, VCFHeaderLine>();
+        HashMap<String, VCFHeaderLine> filterMap = new HashMap<String, VCFHeaderLine>();
+        HashMap<String, VCFHeaderLine> formatMap = new HashMap<String, VCFHeaderLine>();
+        HashMap<String, VCFHeaderLine> sampleMap = new HashMap<String, VCFHeaderLine>();
+
+        for(Map.Entry<String, VCFHeader> vcfRod : vcfRods.entrySet()) {
+            String name = vcfRod.getKey();
+            VCFHeader source = vcfRod.getValue();
+
+            for (VCFHeaderLine line : source.getMetaData()) {
+                String key = line.getKey();
+
+                if(key.equals("center")) {
+                    if(map.containsKey("center")) {
+                        String newValue = map.get("center").getValue() + "," + line.getValue();
+                        VCFHeaderLine newVCFHeaderLine = new VCFHeaderLine("center", newValue);
+                        map.put("center", newVCFHeaderLine); // replace the old "center" with the new one
+                    } else {
+                        map.put("center", line);
+                    }
+                } else if(key.equals("INFO")) {
+                    if(line instanceof VCFNamedHeaderLine) {
+                        String infoKey = ((VCFNamedHeaderLine) line).getName();
+                        if(infoMap.containsKey(infoKey))
+                            mergeCompoundHeaderLine(infoMap, infoKey, line, logger);
+                        else
+                            infoMap.put(infoKey, line);
+                    } else
+                        throw new IllegalStateException("Incompatible header type, not VCFNamedHeaderLine: " + line);
+                } else if(key.equals("FILTER")) {
+                    if(line instanceof VCFFilterHeaderLine) {
+                        String filterKey = ((VCFFilterHeaderLine) line).getName();
+                        if(filterMap.containsKey(filterKey)) {
+                            VCFHeaderLine other = filterMap.get(filterKey);
+                            String lineName = ((VCFFilterHeaderLine) line).getName();
+                            String otherName = ((VCFFilterHeaderLine) other).getName();
+                            if ( !lineName.equals(otherName) )
+                                throw new IllegalStateException("Incompatible header types: " + line + " " + other );
+                        } else
+                            filterMap.put(filterKey, line);
+                    } else
+                        throw new IllegalStateException("Incompatible header type, not VCFFilterHeaderLine: " + line);
+                } else if(key.equals("FORMAT")) {
+                    if(line instanceof VCFNamedHeaderLine) {
+                        String formatKey = ((VCFNamedHeaderLine) line).getName();
+                        if(formatMap.containsKey(formatKey))
+                            mergeCompoundHeaderLine(formatMap, formatKey, line, logger);
+                        else
+                            formatMap.put(formatKey, line);
+                    }
+                } else if(key.equals("SAMPLE")) {
+                    String sampleValue = insertCenter(line.getValue(), name);
+                    String sampleKey = parseID(line.getValue()) + "." + name;
+                    sampleMap.put(sampleKey, new VCFHeaderLine(sampleKey, sampleValue));
+                } else {
+                    if(map.containsKey(key)) {
+                        VCFHeaderLine other = map.get(key);
+                        if(line.equals(other))
+                            continue;
+                        else {
+                            if ( logger != null ) logger.warn("Ignoring header line already in map: this header line = " + line + " already present header = " + other);
+                            continue;
+                        }
+
+                    }else
+                        map.put(key, line);
+
+                }
+
+            }
+        }
+        Set<VCFHeaderLine> headers = new HashSet<VCFHeaderLine>(map.values());
+        headers.addAll(infoMap.values());
+        headers.addAll(filterMap.values());
+        headers.addAll(filterMap.values());
+        headers.addAll(sampleMap.values());
+
+        return headers;
     }
 
     /**

@@ -114,7 +114,7 @@ public class CombineVariants extends RodWalker<Integer, Integer> {
         if ( SET_KEY.toLowerCase().equals("null") )
             SET_KEY = null;
 
-        Set<VCFHeaderLine> headerLines = VCFUtils.smartMergeHeaders(vcfRods.values(), logger);
+        Set<VCFHeaderLine> headerLines = VCFUtils.tcgaMergeHeaders(vcfRods, logger);
         if ( SET_KEY != null )
             headerLines.add(new VCFInfoHeaderLine(SET_KEY, 1, VCFHeaderLineType.String, "Source VCF for the merged record in CombineVariants"));
         vcfWriter.writeHeader(new VCFHeader(headerLines, sitesOnlyVCF ? Collections.<String>emptySet() : samples));
