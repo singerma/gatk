@@ -209,9 +209,9 @@ public class VCFUtils {
 
         if (compLine.getType() != (compOther.getType())) {
             if ( compLine.getType() == VCFHeaderLineType.Integer && compOther.getType() == VCFHeaderLineType.Float ) {
-                if ( logger != null ) logger.warn("1Promoting Integer to Float in header: " + compLine);
+                if ( logger != null ) logger.warn("Promoting Integer to Float in header: " + compLine);
             } else if ( compLine.getType() == VCFHeaderLineType.Float && compOther.getType() == VCFHeaderLineType.Integer ) {
-                if ( logger != null ) logger.warn("2Promoting Integer to Float in header: " + compOther);
+                if ( logger != null ) logger.warn("Promoting Integer to Float in header: " + compOther);
                 compOther.promoteIntToFloat();
             } else {
                 throw new IllegalStateException("Incompatible header types, collision between these two types: " + line + " " + other );
