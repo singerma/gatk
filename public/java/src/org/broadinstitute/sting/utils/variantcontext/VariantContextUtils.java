@@ -527,8 +527,8 @@ public class VariantContextUtils {
             //
             if (vc.hasAttribute(VCFConstants.DEPTH_KEY))
                 depth += Integer.valueOf(vc.getAttributeAsString(VCFConstants.DEPTH_KEY));
-            if (rsID == null && vc.hasID())
-                rsID = vc.getID();
+            //if (rsID == null && vc.hasID())
+            //    rsID = vc.getID();
             if (mergeInfoWithMaxAC && vc.hasAttribute(VCFConstants.ALLELE_COUNT_KEY)) {
                 String rawAlleleCounts = vc.getAttributeAsString(VCFConstants.ALLELE_COUNT_KEY);
                 // lets see if the string contains a , separator
@@ -598,8 +598,8 @@ public class VariantContextUtils {
 
         if ( depth > 0 )
             attributes.put(VCFConstants.DEPTH_KEY, String.valueOf(depth));
-        if ( rsID != null )
-            attributes.put(VariantContext.ID_KEY, rsID);
+        //if ( rsID != null )
+        //    attributes.put(VariantContext.ID_KEY, rsID);
 
         VariantContext merged = new VariantContext(name, loc.getContig(), loc.getStart(), loc.getStop(), alleles, genotypes, negLog10PError, filters, (mergeInfoWithMaxAC ? attributesWithMaxAC : attributes) );
         // Trim the padded bases of all alleles if necessary
