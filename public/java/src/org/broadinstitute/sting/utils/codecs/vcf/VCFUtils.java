@@ -334,7 +334,7 @@ public class VCFUtils {
         Set<VCFHeaderLine> headers = new HashSet<VCFHeaderLine>(map.values());
         headers.addAll(infoMap.values());
         headers.addAll(filterMap.values());
-        headers.addAll(filterMap.values());
+        headers.addAll(formatMap.values());
         headers.addAll(sampleMap.values());
 
         return headers;
