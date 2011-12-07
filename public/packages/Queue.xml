@@ -33,7 +33,7 @@
             <package name="org.broadinstitute.sting.queue.**" />
 
             <!-- Pipeline + Utils -->
-            <package name="org.broadinstitute.sting.datasources.pipeline.**" />
+            <package name="org.broadinstitute.sting.pipeline.**" />
             <package name="org.broadinstitute.sting.utils.**" />
 
             <!-- Scala -->
@@ -41,6 +41,7 @@
 
             <!-- Picard -->
             <package name="net.sf.picard.**" />
+            <package name="edu.mit.broad.picard.**" />
 
             <!-- JavaMail -->
             <package name="javax.activation.**" />
@@ -58,7 +59,16 @@
             <dir name="com/sun/jna" />
 
             <!-- Contracts for Java -->
-            <package name="class com.google.java.contract.**" />
+            <package name="com.google.java.contract.**" />
+
+            <!-- snpEff -->
+            <package name="ca.mcgill.mcb.pcingola.**" />
+            <file path="snpEff_genes.ftl" />
+            <file path="snpEff_summary.ftl" />
+            
+            <!-- R scripts -->
+            <dir name="org/broadinstitute/sting/queue" includes="**/*.R" />
+
         </dependencies>
         <modules>
             <module file="GATKEngine.xml"/>

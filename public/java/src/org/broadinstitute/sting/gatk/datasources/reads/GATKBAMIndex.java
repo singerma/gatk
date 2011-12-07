@@ -23,24 +23,18 @@
  */
 package org.broadinstitute.sting.gatk.datasources.reads;
 
-import net.sf.samtools.Bin;
-
-import net.sf.samtools.GATKBAMFileSpan;
-import net.sf.samtools.GATKBin;
-import net.sf.samtools.GATKChunk;
-import net.sf.samtools.LinearIndex;
-import net.sf.samtools.SAMException;
-import net.sf.samtools.util.RuntimeIOException;
+import net.sf.samtools.*;
 import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
-import java.lang.ref.SoftReference;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * A basic interface for querying BAM indices.
@@ -219,6 +213,45 @@ public class GATKBAMIndex {
         final int levelStart = LEVEL_STARTS[level];
         final int levelSize = ((level==getNumIndexLevels()-1) ? MAX_BINS-1 : LEVEL_STARTS[level+1]) - levelStart;
         return (new GATKBin(bin).getBinNumber()-levelStart+1)*(BIN_GENOMIC_SPAN /levelSize);
+    }
+
+    /**
+     * Use to get close to the unmapped reads at the end of a BAM file.
+     * @return The file offset of the first record in the last linear bin, or -1
+     * if there are no elements in linear bins (i.e. no mapped reads).
+     */
+    public long getStartOfLastLinearBin() {
+        openIndexFile();
+
+        seek(4);
+
+        final int sequenceCount = readInteger();
+        // Because no reads may align to the last sequence in the sequence dictionary,
+        // grab the last element of the linear index for each sequence, and return
+        // the last one from the last sequence that has one.
+        long lastLinearIndexPointer = -1;
+        for (int i = 0; i < sequenceCount; i++) {
+            // System.out.println("# Sequence TID: " + i);
+            final int nBins = readInteger();
+            // System.out.println("# nBins: " + nBins);
+            for (int j1 = 0; j1 < nBins; j1++) {
+                // Skip bin #
+                skipBytes(4);
+                final int nChunks = readInteger();
+                // Skip chunks
+                skipBytes(16 * nChunks);
+            }
+            final int nLinearBins = readInteger();
+            if (nLinearBins > 0) {
+                // Skip to last element of list of linear bins
+                skipBytes(8 * (nLinearBins - 1));
+                lastLinearIndexPointer = readLongs(1)[0];
+            }
+        }
+
+        closeIndexFile();
+
+        return lastLinearIndexPointer;
     }
 
     /**

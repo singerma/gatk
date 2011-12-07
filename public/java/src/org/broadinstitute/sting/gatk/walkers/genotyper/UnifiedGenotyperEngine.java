@@ -25,22 +25,23 @@
 
 package org.broadinstitute.sting.gatk.walkers.genotyper;
 
+import com.google.java.contract.Requires;
 import org.apache.log4j.Logger;
-import org.broadinstitute.sting.utils.variantcontext.GenotypeLikelihoods;
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
-import org.broadinstitute.sting.utils.variantcontext.Genotype;
-import org.broadinstitute.sting.utils.variantcontext.Allele;
+import org.broadinstitute.sting.commandline.RodBinding;
 import org.broadinstitute.sting.gatk.GenomeAnalysisEngine;
-import org.broadinstitute.sting.gatk.contexts.AlignmentContextUtils;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
+import org.broadinstitute.sting.gatk.contexts.AlignmentContextUtils;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
 import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
 import org.broadinstitute.sting.gatk.walkers.annotator.VariantAnnotatorEngine;
 import org.broadinstitute.sting.utils.*;
 import org.broadinstitute.sting.utils.baq.BAQ;
-import org.broadinstitute.sting.utils.pileup.*;
 import org.broadinstitute.sting.utils.codecs.vcf.VCFConstants;
-import com.google.java.contract.*;
+import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
+import org.broadinstitute.sting.utils.pileup.PileupElement;
+import org.broadinstitute.sting.utils.pileup.ReadBackedExtendedEventPileup;
+import org.broadinstitute.sting.utils.pileup.ReadBackedPileup;
+import org.broadinstitute.sting.utils.variantcontext.*;
 
 import java.io.PrintStream;
 import java.util.*;
@@ -49,13 +50,17 @@ public class UnifiedGenotyperEngine {
     public static final String LOW_QUAL_FILTER_NAME = "LowQual";
 
     public enum OUTPUT_MODE {
+        /** the default */
         EMIT_VARIANTS_ONLY,
+        /** include confident reference sites */
         EMIT_ALL_CONFIDENT_SITES,
+        /** any callable site regardless of confidence */
         EMIT_ALL_SITES
     }
 
     // the unified argument collection
     private final UnifiedArgumentCollection UAC;
+    public UnifiedArgumentCollection getUAC() { return UAC; }
 
     // the annotation engine
     private final VariantAnnotatorEngine annotationEngine;
@@ -115,7 +120,6 @@ public class UnifiedGenotyperEngine {
         this.samples = new TreeSet<String>(samples);
         // note that, because we cap the base quality by the mapping quality, minMQ cannot be less than minBQ
         this.UAC = UAC.clone();
-        this.UAC.MIN_MAPPING_QUALTY_SCORE = Math.max(UAC.MIN_MAPPING_QUALTY_SCORE, UAC.MIN_BASE_QUALTY_SCORE);
 
         this.logger = logger;
         this.verboseWriter = verboseWriter;
@@ -141,9 +145,6 @@ public class UnifiedGenotyperEngine {
      * @return the VariantCallContext object
      */
     public VariantCallContext calculateLikelihoodsAndGenotypes(RefMetaDataTracker tracker, ReferenceContext refContext, AlignmentContext rawContext) {
-        if ( UAC.COVERAGE_AT_WHICH_TO_ABORT > 0 && rawContext.size() > UAC.COVERAGE_AT_WHICH_TO_ABORT )
-            return null;
-
         final GenotypeLikelihoodsCalculationModel.Model model = getCurrentGLModel(tracker, refContext, rawContext );
         if( model == null ) {
             return (UAC.OutputMode == OUTPUT_MODE.EMIT_ALL_SITES && UAC.GenotypingMode == GenotypeLikelihoodsCalculationModel.GENOTYPING_MODE.GENOTYPE_GIVEN_ALLELES ? generateEmptyContext(tracker, refContext, null, rawContext) : null);
@@ -230,10 +231,11 @@ public class UnifiedGenotyperEngine {
     private VariantCallContext generateEmptyContext(RefMetaDataTracker tracker, ReferenceContext ref, Map<String, AlignmentContext> stratifiedContexts, AlignmentContext rawContext) {
         VariantContext vc;
         if ( UAC.GenotypingMode == GenotypeLikelihoodsCalculationModel.GENOTYPING_MODE.GENOTYPE_GIVEN_ALLELES ) {
-            VariantContext vcInput = SNPGenotypeLikelihoodsCalculationModel.getSNPVCFromAllelesRod(tracker, ref, false, logger);
+            VariantContext vcInput = UnifiedGenotyperEngine.getVCFromAllelesRod(tracker, ref, rawContext.getLocation(), false, logger, UAC.alleles);
             if ( vcInput == null )
                 return null;
-            vc = new VariantContext("UG_call", vcInput.getChr(), vcInput.getStart(), vcInput.getEnd(), vcInput.getAlleles());
+            vc = new VariantContext("UG_call", vcInput.getChr(), vcInput.getStart(), vcInput.getEnd(), vcInput.getAlleles(), InferredGeneticContext.NO_NEG_LOG_10PERROR, null, null, ref.getBase());
+
         } else {
             // deal with bad/non-standard reference bases
             if ( !Allele.acceptableAlleleBases(new byte[]{ref.getBase()}) )
@@ -245,7 +247,7 @@ public class UnifiedGenotyperEngine {
         }
         
         if ( annotationEngine != null ) {
-            // we want to use the *unfiltered* and *unBAQed* context for the annotations
+            // Note: we want to use the *unfiltered* and *unBAQed* context for the annotations
             ReadBackedPileup pileup = null;
             if (rawContext.hasExtendedEventPileup())
                 pileup = rawContext.getExtendedEventPileup();
@@ -253,10 +255,10 @@ public class UnifiedGenotyperEngine {
                 pileup = rawContext.getBasePileup();
             stratifiedContexts = AlignmentContextUtils.splitContextBySampleName(pileup, UAC.ASSUME_SINGLE_SAMPLE);
 
-            vc = annotationEngine.annotateContext(tracker, ref, stratifiedContexts, vc).iterator().next();
+            vc = annotationEngine.annotateContext(tracker, ref, stratifiedContexts, vc);
         }
 
-        return new VariantCallContext(vc, ref.getBase(), false);
+        return new VariantCallContext(vc, false);
     }
 
     private VariantContext createVariantContextFromLikelihoods(ReferenceContext refContext, Allele refAllele, Map<String, MultiallelicGenotypeLikelihoods> GLs) {
@@ -298,7 +300,8 @@ public class UnifiedGenotyperEngine {
                 genotypes,
                 VariantContext.NO_NEG_LOG_10PERROR,
                 null,
-                null);
+                null,
+                refContext.getBase());
     }
 
     // private method called by both UnifiedGenotyper and UGCallVariants entry points into the engine
@@ -318,7 +321,7 @@ public class UnifiedGenotyperEngine {
 
         // 'zero' out the AFs (so that we don't have to worry if not all samples have reads at this position)
         clearAFarray(log10AlleleFrequencyPosteriors.get());
-        afcm.get().getLog10PNonRef(tracker, refContext, vc.getGenotypes(), vc.getAlleles(), getAlleleFrequencyPriors(model), log10AlleleFrequencyPosteriors.get());
+        afcm.get().getLog10PNonRef(vc.getGenotypes(), vc.getAlleles(), getAlleleFrequencyPriors(model), log10AlleleFrequencyPosteriors.get());
 
         // find the most likely frequency
         int bestAFguess = MathUtils.maxElementIndex(log10AlleleFrequencyPosteriors.get());
@@ -370,38 +373,38 @@ public class UnifiedGenotyperEngine {
             attributes.put(VCFConstants.DOWNSAMPLED_KEY, true);
 
 
-        if ( !UAC.NO_SLOD && bestAFguess != 0 ) {
-            final boolean DEBUG_SLOD = false;
+        if ( UAC.COMPUTE_SLOD && bestAFguess != 0 ) {
+            //final boolean DEBUG_SLOD = false;
 
             // the overall lod
             VariantContext vcOverall = calculateLikelihoods(tracker, refContext, stratifiedContexts, AlignmentContextUtils.ReadOrientation.COMPLETE, vc.getAlternateAllele(0), false, model);
             clearAFarray(log10AlleleFrequencyPosteriors.get());
-            afcm.get().getLog10PNonRef(tracker, refContext, vcOverall.getGenotypes(), vc.getAlleles(), getAlleleFrequencyPriors(model), log10AlleleFrequencyPosteriors.get());
+            afcm.get().getLog10PNonRef(vcOverall.getGenotypes(), vc.getAlleles(), getAlleleFrequencyPriors(model), log10AlleleFrequencyPosteriors.get());
             //double overallLog10PofNull = log10AlleleFrequencyPosteriors.get()[0];
             double overallLog10PofF = MathUtils.log10sumLog10(log10AlleleFrequencyPosteriors.get(), 1);
-            if ( DEBUG_SLOD ) System.out.println("overallLog10PofF=" + overallLog10PofF);
+            //if ( DEBUG_SLOD ) System.out.println("overallLog10PofF=" + overallLog10PofF);
 
             // the forward lod
             VariantContext vcForward = calculateLikelihoods(tracker, refContext, stratifiedContexts, AlignmentContextUtils.ReadOrientation.FORWARD, vc.getAlternateAllele(0), false, model);
             clearAFarray(log10AlleleFrequencyPosteriors.get());
-            afcm.get().getLog10PNonRef(tracker, refContext, vcForward.getGenotypes(), vc.getAlleles(), getAlleleFrequencyPriors(model), log10AlleleFrequencyPosteriors.get());
+            afcm.get().getLog10PNonRef(vcForward.getGenotypes(), vc.getAlleles(), getAlleleFrequencyPriors(model), log10AlleleFrequencyPosteriors.get());
             //double[] normalizedLog10Posteriors = MathUtils.normalizeFromLog10(log10AlleleFrequencyPosteriors.get(), true);
             double forwardLog10PofNull = log10AlleleFrequencyPosteriors.get()[0];
             double forwardLog10PofF = MathUtils.log10sumLog10(log10AlleleFrequencyPosteriors.get(), 1);
-            if ( DEBUG_SLOD ) System.out.println("forwardLog10PofNull=" + forwardLog10PofNull + ", forwardLog10PofF=" + forwardLog10PofF);
+            //if ( DEBUG_SLOD ) System.out.println("forwardLog10PofNull=" + forwardLog10PofNull + ", forwardLog10PofF=" + forwardLog10PofF);
 
             // the reverse lod
             VariantContext vcReverse = calculateLikelihoods(tracker, refContext, stratifiedContexts, AlignmentContextUtils.ReadOrientation.REVERSE, vc.getAlternateAllele(0), false, model);
             clearAFarray(log10AlleleFrequencyPosteriors.get());
-            afcm.get().getLog10PNonRef(tracker, refContext, vcReverse.getGenotypes(), vc.getAlleles(), getAlleleFrequencyPriors(model), log10AlleleFrequencyPosteriors.get());
+            afcm.get().getLog10PNonRef(vcReverse.getGenotypes(), vc.getAlleles(), getAlleleFrequencyPriors(model), log10AlleleFrequencyPosteriors.get());
             //normalizedLog10Posteriors = MathUtils.normalizeFromLog10(log10AlleleFrequencyPosteriors.get(), true);
             double reverseLog10PofNull = log10AlleleFrequencyPosteriors.get()[0];
             double reverseLog10PofF = MathUtils.log10sumLog10(log10AlleleFrequencyPosteriors.get(), 1);
-            if ( DEBUG_SLOD ) System.out.println("reverseLog10PofNull=" + reverseLog10PofNull + ", reverseLog10PofF=" + reverseLog10PofF);
+            //if ( DEBUG_SLOD ) System.out.println("reverseLog10PofNull=" + reverseLog10PofNull + ", reverseLog10PofF=" + reverseLog10PofF);
 
             double forwardLod = forwardLog10PofF + reverseLog10PofNull - overallLog10PofF;
             double reverseLod = reverseLog10PofF + forwardLog10PofNull - overallLog10PofF;
-            if ( DEBUG_SLOD ) System.out.println("forward lod=" + forwardLod + ", reverse lod=" + reverseLod);
+            //if ( DEBUG_SLOD ) System.out.println("forward lod=" + forwardLod + ", reverse lod=" + reverseLod);
 
             // strand score is max bias between forward and reverse strands
             double strandScore = Math.max(forwardLod, reverseLod);
@@ -416,17 +419,17 @@ public class UnifiedGenotyperEngine {
 
         int endLoc = calculateEndPos(vc.getAlleles(), vc.getReference(), loc);
 
-        Set<Allele> myAlleles = vc.getAlleles();
+        Set<Allele> myAlleles = new HashSet<Allele>(vc.getAlleles());
         // strip out the alternate allele if it's a ref call
         if ( bestAFguess == 0 && UAC.GenotypingMode == GenotypeLikelihoodsCalculationModel.GENOTYPING_MODE.DISCOVERY ) {
             myAlleles = new HashSet<Allele>(1);
             myAlleles.add(vc.getReference());
         }
         VariantContext vcCall = new VariantContext("UG_call", loc.getContig(), loc.getStart(), endLoc,
-                myAlleles, genotypes, phredScaledConfidence/10.0, passesCallThreshold(phredScaledConfidence) ? null : filter, attributes);
+                myAlleles, genotypes, phredScaledConfidence/10.0, passesCallThreshold(phredScaledConfidence) ? null : filter, attributes, refContext.getBase());
 
         if ( annotationEngine != null ) {
-            // first off, we want to use the *unfiltered* and *unBAQed* context for the annotations
+            // Note: we want to use the *unfiltered* and *unBAQed* context for the annotations
             ReadBackedPileup pileup = null;
             if (rawContext.hasExtendedEventPileup())
                 pileup = rawContext.getExtendedEventPileup();
@@ -434,16 +437,85 @@ public class UnifiedGenotyperEngine {
                 pileup = rawContext.getBasePileup();
             stratifiedContexts = AlignmentContextUtils.splitContextBySampleName(pileup, UAC.ASSUME_SINGLE_SAMPLE);
 
-            Collection<VariantContext> variantContexts = annotationEngine.annotateContext(tracker, refContext, stratifiedContexts, vcCall);
-            vcCall = variantContexts.iterator().next(); // we know the collection will always have exactly 1 element.
+            vcCall = annotationEngine.annotateContext(tracker, refContext, stratifiedContexts, vcCall);
         }
 
-        VariantCallContext call = new VariantCallContext(vcCall, confidentlyCalled(phredScaledConfidence, PofF));
-        call.setRefBase(refContext.getBase());
-        return call;
+        return new VariantCallContext(vcCall, confidentlyCalled(phredScaledConfidence, PofF));
     }
 
-    private int calculateEndPos(Set<Allele> alleles, Allele refAllele, GenomeLoc loc) {
+    // A barebones entry point to the exact model when there is no tracker or stratified contexts available -- only GLs
+    public VariantCallContext calculateGenotypes(final VariantContext vc, final GenomeLoc loc, final GenotypeLikelihoodsCalculationModel.Model model) {
+
+        // initialize the data for this thread if that hasn't been done yet
+        if ( afcm.get() == null ) {
+            log10AlleleFrequencyPosteriors.set(new double[N+1]);
+            afcm.set(getAlleleFrequencyCalculationObject(N, logger, verboseWriter, UAC));
+        }
+
+        // estimate our confidence in a reference call and return
+        if ( vc.getNSamples() == 0 )
+            return null;
+
+        // 'zero' out the AFs (so that we don't have to worry if not all samples have reads at this position)
+        clearAFarray(log10AlleleFrequencyPosteriors.get());
+        afcm.get().getLog10PNonRef(vc.getGenotypes(), vc.getAlleles(), getAlleleFrequencyPriors(model), log10AlleleFrequencyPosteriors.get());
+
+        // find the most likely frequency
+        int bestAFguess = MathUtils.maxElementIndex(log10AlleleFrequencyPosteriors.get());
+
+        // calculate p(f>0)
+        double[] normalizedPosteriors = MathUtils.normalizeFromLog10(log10AlleleFrequencyPosteriors.get());
+        double sum = 0.0;
+        for (int i = 1; i <= N; i++)
+            sum += normalizedPosteriors[i];
+        double PofF = Math.min(sum, 1.0); // deal with precision errors
+
+        double phredScaledConfidence;
+        if ( bestAFguess != 0 || UAC.GenotypingMode == GenotypeLikelihoodsCalculationModel.GENOTYPING_MODE.GENOTYPE_GIVEN_ALLELES ) {
+            phredScaledConfidence = QualityUtils.phredScaleErrorRate(normalizedPosteriors[0]);
+            if ( Double.isInfinite(phredScaledConfidence) )
+                phredScaledConfidence = -10.0 * log10AlleleFrequencyPosteriors.get()[0];
+        } else {
+            phredScaledConfidence = QualityUtils.phredScaleErrorRate(PofF);
+            if ( Double.isInfinite(phredScaledConfidence) ) {
+                sum = 0.0;
+                for (int i = 1; i <= N; i++) {
+                    if ( log10AlleleFrequencyPosteriors.get()[i] == AlleleFrequencyCalculationModel.VALUE_NOT_CALCULATED )
+                        break;
+                    sum += log10AlleleFrequencyPosteriors.get()[i];
+                }
+                phredScaledConfidence = (MathUtils.compareDoubles(sum, 0.0) == 0 ? 0 : -10.0 * sum);
+            }
+        }
+
+        // return a null call if we don't pass the confidence cutoff or the most likely allele frequency is zero
+        if ( UAC.OutputMode != OUTPUT_MODE.EMIT_ALL_SITES && !passesEmitThreshold(phredScaledConfidence, bestAFguess) ) {
+            // technically, at this point our confidence in a reference call isn't accurately estimated
+            //  because it didn't take into account samples with no data, so let's get a better estimate
+            return null;
+        }
+
+        // create the genotypes
+        Map<String, Genotype> genotypes = afcm.get().assignGenotypes(vc, log10AlleleFrequencyPosteriors.get(), bestAFguess);
+
+        // *** note that calculating strand bias involves overwriting data structures, so we do that last
+        HashMap<String, Object> attributes = new HashMap<String, Object>();
+
+        int endLoc = calculateEndPos(vc.getAlleles(), vc.getReference(), loc);
+
+        Set<Allele> myAlleles = new HashSet<Allele>(vc.getAlleles());
+        // strip out the alternate allele if it's a ref call
+        if ( bestAFguess == 0 && UAC.GenotypingMode == GenotypeLikelihoodsCalculationModel.GENOTYPING_MODE.DISCOVERY ) {
+            myAlleles = new HashSet<Allele>(1);
+            myAlleles.add(vc.getReference());
+        }
+        VariantContext vcCall = new VariantContext("UG_call", loc.getContig(), loc.getStart(), endLoc,
+                myAlleles, genotypes, phredScaledConfidence/10.0, passesCallThreshold(phredScaledConfidence) ? null : filter, attributes, vc.getReferenceBaseForIndel());
+
+        return new VariantCallContext(vcCall, confidentlyCalled(phredScaledConfidence, PofF));
+    }
+
+    private int calculateEndPos(Collection<Allele> alleles, Allele refAllele, GenomeLoc loc) {
         // TODO - temp fix until we can deal with extended events properly
         // for indels, stop location is one more than ref allele length
         boolean isSNP = true, hasNullAltAllele = false;
@@ -483,39 +555,40 @@ public class UnifiedGenotyperEngine {
 
         Map<String, AlignmentContext> stratifiedContexts = null;
 
+        if ( !BaseUtils.isRegularBase( refContext.getBase() ) )
+            return null;
+
         if ( model == GenotypeLikelihoodsCalculationModel.Model.INDEL ) {
 
             if (UAC.GenotypingMode == GenotypeLikelihoodsCalculationModel.GENOTYPING_MODE.GENOTYPE_GIVEN_ALLELES) {
                 // regular pileup in this case
-                ReadBackedPileup pileup = rawContext.getBasePileup() .getMappingFilteredPileup(UAC.MIN_MAPPING_QUALTY_SCORE);
+                ReadBackedPileup pileup = rawContext.getBasePileup() .getMappingFilteredPileup(UAC.MIN_BASE_QUALTY_SCORE);
 
                 // don't call when there is no coverage
-                if ( pileup.size() == 0 && UAC.OutputMode != OUTPUT_MODE.EMIT_ALL_SITES  )
+                if ( pileup.getNumberOfElements() == 0 && UAC.OutputMode != OUTPUT_MODE.EMIT_ALL_SITES  )
                     return null;
 
                 // stratify the AlignmentContext and cut by sample
                 stratifiedContexts = AlignmentContextUtils.splitContextBySampleName(pileup, UAC.ASSUME_SINGLE_SAMPLE);
 
             } else {
+
                 // todo - tmp will get rid of extended events so this wont be needed
                 if (!rawContext.hasExtendedEventPileup())
                     return null;
                 ReadBackedExtendedEventPileup rawPileup = rawContext.getExtendedEventPileup();
 
                 // filter the context based on min mapping quality
-                ReadBackedExtendedEventPileup pileup = rawPileup.getMappingFilteredPileup(UAC.MIN_MAPPING_QUALTY_SCORE);
+                ReadBackedExtendedEventPileup pileup = rawPileup.getMappingFilteredPileup(UAC.MIN_BASE_QUALTY_SCORE);
 
                 // don't call when there is no coverage
-                if ( pileup.size() == 0 && UAC.OutputMode != OUTPUT_MODE.EMIT_ALL_SITES  )
+                if ( pileup.getNumberOfElements() == 0 && UAC.OutputMode != OUTPUT_MODE.EMIT_ALL_SITES  )
                     return null;
 
                 // stratify the AlignmentContext and cut by sample
                 stratifiedContexts = AlignmentContextUtils.splitContextBySampleName(pileup, UAC.ASSUME_SINGLE_SAMPLE);
             }
         } else if ( model == GenotypeLikelihoodsCalculationModel.Model.SNP ) {
-
-            if ( !BaseUtils.isRegularBase( refContext.getBase() ) )
-                return null;
 
             // stratify the AlignmentContext and cut by sample
             stratifiedContexts = AlignmentContextUtils.splitContextBySampleName(rawContext.getBasePileup(), UAC.ASSUME_SINGLE_SAMPLE);
@@ -525,7 +598,7 @@ public class UnifiedGenotyperEngine {
                 for( final PileupElement p : rawContext.getBasePileup() ) {
                     if( p.isDeletion() ) { numDeletions++; }
                 }
-                if( ((double) numDeletions) / ((double) rawContext.getBasePileup().size()) > UAC.MAX_DELETION_FRACTION ) {
+                if( ((double) numDeletions) / ((double) rawContext.getBasePileup().getNumberOfElements()) > UAC.MAX_DELETION_FRACTION ) {
                     return null;
                 }
             }
@@ -538,6 +611,21 @@ public class UnifiedGenotyperEngine {
         for ( int i = 0; i < AFs.length; i++ )
             AFs[i] = AlleleFrequencyCalculationModel.VALUE_NOT_CALCULATED;
     }
+
+    private final static double[] binomialProbabilityDepthCache = new double[10000];
+    static {
+        for ( int i = 1; i < binomialProbabilityDepthCache.length; i++ ) {
+            binomialProbabilityDepthCache[i] = MathUtils.binomialProbability(0, i, 0.5);
+        }
+    }
+
+    private final double getRefBinomialProb(final int depth) {
+        if ( depth < binomialProbabilityDepthCache.length )
+            return binomialProbabilityDepthCache[depth];
+        else
+            return MathUtils.binomialProbability(0, depth, 0.5);
+    }
+
 
     private VariantCallContext estimateReferenceConfidence(VariantContext vc, Map<String, AlignmentContext> contexts, double theta, boolean ignoreCoveredSamples, double initialPofRef) {
         if ( contexts == null )
@@ -557,12 +645,12 @@ public class UnifiedGenotyperEngine {
             if (isCovered) {
                 AlignmentContext context =  contexts.get(sample);
                 if (context.hasBasePileup())
-                    depth = context.getBasePileup().size();
+                    depth = context.getBasePileup().depthOfCoverage();
                 else if (context.hasExtendedEventPileup())
-                    depth = context.getExtendedEventPileup().size();
+                    depth = context.getExtendedEventPileup().depthOfCoverage();
             }
 
-            P_of_ref *= 1.0 - (theta / 2.0) * MathUtils.binomialProbability(0, depth, 0.5);
+            P_of_ref *= 1.0 - (theta / 2.0) * getRefBinomialProb(depth);
         }
 
         return new VariantCallContext(vc, QualityUtils.phredScaleErrorRate(1.0 - P_of_ref) >= UAC.STANDARD_CONFIDENCE_FOR_CALLING, false);
@@ -630,21 +718,31 @@ public class UnifiedGenotyperEngine {
             // no extended event pileup
             // if we're genotyping given alleles and we have a requested SNP at this position, do SNP
             if (UAC.GenotypingMode == GenotypeLikelihoodsCalculationModel.GENOTYPING_MODE.GENOTYPE_GIVEN_ALLELES) {
-                VariantContext vcInput = SNPGenotypeLikelihoodsCalculationModel.getSNPVCFromAllelesRod(tracker, refContext, false, logger);
+                VariantContext vcInput = UnifiedGenotyperEngine.getVCFromAllelesRod(tracker, refContext, rawContext.getLocation(), false, logger, UAC.alleles);
                 if (vcInput == null)
                     return null;
 
-                if (vcInput.isSNP() &&  ( UAC.GLmodel == GenotypeLikelihoodsCalculationModel.Model.BOTH || UAC.GLmodel == GenotypeLikelihoodsCalculationModel.Model.SNP))
-                    return GenotypeLikelihoodsCalculationModel.Model.SNP;
+                // todo - no support to genotype MNP's yet
+                if  (vcInput.isMNP())
+                    return null;
+
+                if (vcInput.isSNP())  {
+                    if (( UAC.GLmodel == GenotypeLikelihoodsCalculationModel.Model.BOTH || UAC.GLmodel == GenotypeLikelihoodsCalculationModel.Model.SNP))
+                        return GenotypeLikelihoodsCalculationModel.Model.SNP;
+                    else
+                        // ignore SNP's if user chose INDEL mode
+                        return null;
+                }
                 else if ((vcInput.isIndel() || vcInput.isMixed()) && (UAC.GLmodel == GenotypeLikelihoodsCalculationModel.Model.BOTH || UAC.GLmodel == GenotypeLikelihoodsCalculationModel.Model.INDEL))
                     return GenotypeLikelihoodsCalculationModel.Model.INDEL;
-            }   else {
+            }
+            else {
                 // todo - this assumes SNP's take priority when BOTH is selected, should do a smarter way once extended events are removed
                 if( UAC.GLmodel == GenotypeLikelihoodsCalculationModel.Model.BOTH || UAC.GLmodel == GenotypeLikelihoodsCalculationModel.Model.SNP)
                     return GenotypeLikelihoodsCalculationModel.Model.SNP;
                 else if (UAC.GLmodel == GenotypeLikelihoodsCalculationModel.Model.INDEL)
                     return GenotypeLikelihoodsCalculationModel.Model.INDEL;
-                }
+            }
         }
         return null;
     }
@@ -725,5 +823,24 @@ public class UnifiedGenotyperEngine {
         }
 
         return afcm;
+    }
+
+    public static VariantContext getVCFromAllelesRod(RefMetaDataTracker tracker, ReferenceContext ref, GenomeLoc loc, boolean requireSNP, Logger logger, final RodBinding<VariantContext> allelesBinding) {
+        if ( tracker == null || ref == null || logger == null )
+            throw new ReviewedStingException("Bad arguments: tracker=" + tracker + " ref=" + ref + " logger=" + logger);
+        VariantContext vc = null;
+
+        // search for usable record
+        for( final VariantContext vc_input : tracker.getValues(allelesBinding, loc) ) {
+            if ( vc_input != null && ! vc_input.isFiltered() && (! requireSNP || vc_input.isSNP() )) {
+                if ( vc == null ) {
+                    vc = vc_input;
+                } else {
+                    logger.warn("Multiple valid VCF records detected in the alleles input file at site " + ref.getLocus() + ", only considering the first record");
+                }
+            }
+        }
+
+        return vc;
     }
 }

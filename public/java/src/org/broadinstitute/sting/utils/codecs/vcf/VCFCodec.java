@@ -7,15 +7,52 @@ import org.broadinstitute.sting.utils.variantcontext.Allele;
 import org.broadinstitute.sting.utils.variantcontext.Genotype;
 import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
+import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.util.*;
 
-
 /**
- * a feature codec for the VCF 4 specification.  Our aim is to read in the records and convert to VariantContext as
- * quickly as possible, relying on VariantContext to do the validation of any contradictory (or malformed) record parameters.
+ * A feature codec for the VCF 4 specification
+ *
+ * <p>
+ * VCF is a text file format (most likely stored in a compressed manner). It contains meta-information lines, a
+ * header line, and then data lines each containing information about a position in the genome.
+ * </p>
+ * <p>One of the main uses of next-generation sequencing is to discover variation amongst large populations
+ * of related samples. Recently the format for storing next-generation read alignments has been
+ * standardised by the SAM/BAM file format specification. This has significantly improved the
+ * interoperability of next-generation tools for alignment, visualisation, and variant calling.
+ * We propose the Variant Call Format (VCF) as a standarised format for storing the most prevalent
+ * types of sequence variation, including SNPs, indels and larger structural variants, together
+ * with rich annotations. VCF is usually stored in a compressed manner and can be indexed for
+ * fast data retrieval of variants from a range of positions on the reference genome.
+ * The format was developed for the 1000 Genomes Project, and has also been adopted by other projects
+ * such as UK10K, dbSNP, or the NHLBI Exome Project. VCFtools is a software suite that implements
+ * various utilities for processing VCF files, including validation, merging and comparing,
+ * and also provides a general Perl and Python API.
+ * The VCF specification and VCFtools are available from http://vcftools.sourceforge.net.</p>
+ *
+ * <p>
+ * See also: @see <a href="http://vcftools.sourceforge.net/specs.html">VCF specification</a><br>
+ * See also: @see <a href="http://www.ncbi.nlm.nih.gov/pubmed/21653522">VCF spec. publication</a>
+ * </p>
+ *
+ * <h2>File format example</h2>
+ * <pre>
+ *     ##fileformat=VCFv4.0
+ *     #CHROM  POS     ID      REF     ALT     QUAL    FILTER  INFO    FORMAT  NA12878
+ *     chr1    109     .       A       T       0       PASS  AC=1    GT:AD:DP:GL:GQ  0/1:610,327:308:-316.30,-95.47,-803.03:99
+ *     chr1    147     .       C       A       0       PASS  AC=1    GT:AD:DP:GL:GQ  0/1:294,49:118:-57.87,-34.96,-338.46:99
+ * </pre>
+ *
+ * @author Mark DePristo
+ * @since 2010
  */
 public class VCFCodec extends AbstractVCFCodec {
+    // Our aim is to read in the records and convert to VariantContext as quickly as possible, relying on VariantContext to do the validation of any contradictory (or malformed) record parameters.
+
+    public final static String VCF4_MAGIC_HEADER = "##fileformat=VCFv4";
 
     /**
      * @param reader the line reader to take header lines from
@@ -68,34 +105,37 @@ public class VCFCodec extends AbstractVCFCodec {
      * @return a set of the filters applied or null if filters were not applied to the record (e.g. as per the missing value in a VCF)
      */
     protected Set<String> parseFilters(String filterString) {
+        return parseFilters(filterHash, lineNo, filterString);
+    }
 
+    public static Set<String> parseFilters(final Map<String, LinkedHashSet<String>> cache, final int lineNo, final String filterString) {
         // null for unfiltered
         if ( filterString.equals(VCFConstants.UNFILTERED) )
             return null;
 
-        // empty set for passes filters
-        LinkedHashSet<String> fFields = new LinkedHashSet<String>();
-
         if ( filterString.equals(VCFConstants.PASSES_FILTERS_v4) )
-            return fFields;
+            return Collections.emptySet();
         if ( filterString.equals(VCFConstants.PASSES_FILTERS_v3) )
-            generateException(VCFConstants.PASSES_FILTERS_v3 + " is an invalid filter name in vcf4");
+            generateException(VCFConstants.PASSES_FILTERS_v3 + " is an invalid filter name in vcf4", lineNo);
         if ( filterString.length() == 0 )
-            generateException("The VCF specification requires a valid filter status");
+            generateException("The VCF specification requires a valid filter status: filter was " + filterString, lineNo);
 
         // do we have the filter string cached?
-        if ( filterHash.containsKey(filterString) )
-            return filterHash.get(filterString);
+        if ( cache != null && cache.containsKey(filterString) )
+            return Collections.unmodifiableSet(cache.get(filterString));
 
+        // empty set for passes filters
+        LinkedHashSet<String> fFields = new LinkedHashSet<String>();
         // otherwise we have to parse and cache the value
         if ( filterString.indexOf(VCFConstants.FILTER_CODE_SEPARATOR) == -1 )
             fFields.add(filterString);
         else
             fFields.addAll(Arrays.asList(filterString.split(VCFConstants.FILTER_CODE_SEPARATOR)));
 
-        filterHash.put(filterString, fFields);
+        fFields = fFields;
+        if ( cache != null ) cache.put(filterString, fFields);
 
-        return fFields;
+        return Collections.unmodifiableSet(fFields);
     }
 
 
@@ -145,8 +185,6 @@ public class VCFCodec extends AbstractVCFCodec {
 
                     // todo -- all of these on the fly parsing of the missing value should be static constants
                     if (gtKey.equals(VCFConstants.GENOTYPE_KEY)) {
-                        if (i != 0)
-                            generateException("Saw GT at position " + i + ", but it must be at the first position for genotypes");
                         genotypeAlleleLocation = i;
                     } else if (gtKey.equals(VCFConstants.GENOTYPE_QUALITY_KEY)) {
                         GTQual = missing ? parseQual(VCFConstants.MISSING_VALUE_v4) : parseQual(GTValueArray[i]);
@@ -160,22 +198,24 @@ public class VCFCodec extends AbstractVCFCodec {
                 }
             }
 
-            // check to make sure we found a gentoype field
-            // TODO -- This is no longer required in v4.1
-            if (genotypeAlleleLocation < 0) generateException("Unable to find required field GT for the record; we don't yet support a missing GT field");
+            // check to make sure we found a genotype field if we are a VCF4.0 file
+            if ( version == VCFHeaderVersion.VCF4_0 && genotypeAlleleLocation == -1 )
+                generateException("Unable to find the GT field for the record; the GT field is required in VCF4.0");
+            if ( genotypeAlleleLocation > 0 )
+                generateException("Saw GT field at position " + genotypeAlleleLocation + ", but it must be at the first position for genotypes when present");
 
-            // todo -- assuming allele list length in the single digits is bad.  Fix me.
-            // Check for > 1 for haploid genotypes
-            boolean phased = GTValueArray[genotypeAlleleLocation].length() > 1 && GTValueArray[genotypeAlleleLocation].charAt(1) == '|';
+            List<Allele> GTalleles = (genotypeAlleleLocation == -1 ? null : parseGenotypeAlleles(GTValueArray[genotypeAlleleLocation], alleles, alleleMap));
+            boolean phased = genotypeAlleleLocation != -1 && GTValueArray[genotypeAlleleLocation].indexOf(VCFConstants.PHASED) != -1;
 
             // add it to the list
             try {
-                genotypes.put(sampleName, new Genotype(sampleName,
-                        parseGenotypeAlleles(GTValueArray[genotypeAlleleLocation], alleles, alleleMap),
-                        GTQual,
-                        genotypeFilters,
-                        gtAttributes,
-                        phased));
+                genotypes.put(sampleName,
+                        new Genotype(sampleName,
+                                GTalleles,
+                                GTQual,
+                                genotypeFilters,
+                                gtAttributes,
+                                phased));
             } catch (TribbleException e) {
                 throw new TribbleException.InternalCodecException(e.getMessage() + ", at position " + chr+":"+pos);
             }
@@ -184,5 +224,8 @@ public class VCFCodec extends AbstractVCFCodec {
         return genotypes;
     }
 
-
+    @Override
+    public boolean canDecode(final File potentialInput) {
+        return canDecodeFile(potentialInput, VCF4_MAGIC_HEADER);
+    }
 }

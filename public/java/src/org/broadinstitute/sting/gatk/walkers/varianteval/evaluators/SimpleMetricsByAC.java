@@ -1,18 +1,18 @@
 package org.broadinstitute.sting.gatk.walkers.varianteval.evaluators;
 
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
-import org.broadinstitute.sting.utils.variantcontext.VariantContextUtils;
 import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
 import org.broadinstitute.sting.gatk.walkers.varianteval.VariantEvalWalker;
 import org.broadinstitute.sting.gatk.walkers.varianteval.stratifications.Degeneracy;
 import org.broadinstitute.sting.gatk.walkers.varianteval.stratifications.Sample;
-import org.broadinstitute.sting.gatk.walkers.varianteval.tags.Analysis;
-import org.broadinstitute.sting.gatk.walkers.varianteval.tags.DataPoint;
+import org.broadinstitute.sting.gatk.walkers.varianteval.util.Analysis;
+import org.broadinstitute.sting.gatk.walkers.varianteval.util.DataPoint;
 import org.broadinstitute.sting.gatk.walkers.varianteval.util.StateKey;
-import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
 import org.broadinstitute.sting.gatk.walkers.varianteval.util.TableType;
+import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
+import org.broadinstitute.sting.utils.variantcontext.VariantContextUtils;
 
 import java.util.ArrayList;
 
@@ -120,7 +120,7 @@ public class SimpleMetricsByAC extends VariantEvaluator implements StandardEval 
             if ( eval.hasGenotypes() )
                 ac = eval.getChromosomeCount(eval.getAlternateAllele(0));
             else if ( eval.hasAttribute("AC") ) {
-                ac = Integer.valueOf(eval.getAttributeAsString("AC"));
+                ac = eval.getAttributeAsInt("AC", -1);
             }
 
             if ( ac != -1 ) {
@@ -166,7 +166,7 @@ public class SimpleMetricsByAC extends VariantEvaluator implements StandardEval 
                 }
             }
 
-            if ( eval.isSNP() && eval.isBiallelic() && metrics != null ) {
+            if ( eval.isSNP() && eval.isBiallelic() && eval.isPolymorphic() && metrics != null ) {
                 metrics.incrValue(eval);
             }
         }

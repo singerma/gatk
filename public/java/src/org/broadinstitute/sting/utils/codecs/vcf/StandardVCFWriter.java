@@ -24,6 +24,7 @@
 
 package org.broadinstitute.sting.utils.codecs.vcf;
 
+import net.sf.samtools.SAMSequenceDictionary;
 import org.broad.tribble.Tribble;
 import org.broad.tribble.TribbleException;
 import org.broad.tribble.index.DynamicIndexCreator;
@@ -32,57 +33,42 @@ import org.broad.tribble.index.IndexFactory;
 import org.broad.tribble.util.LittleEndianOutputStream;
 import org.broad.tribble.util.ParsingUtils;
 import org.broad.tribble.util.PositionalStream;
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
+import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
 import org.broadinstitute.sting.utils.variantcontext.Allele;
 import org.broadinstitute.sting.utils.variantcontext.Genotype;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
 import java.io.*;
-import java.util.*;
 import java.lang.reflect.Array;
+import java.util.*;
 
 /**
  * this class writes VCF files
  */
-public class StandardVCFWriter implements VCFWriter {
+public class StandardVCFWriter extends IndexingVCFWriter {
+    // the print stream we're writing to
+    final protected BufferedWriter mWriter;
+
+    // should we write genotypes or just sites?
+    final protected boolean doNotWriteGenotypes;
 
     // the VCF header we're storing
     protected VCFHeader mHeader = null;
 
-    // the print stream we're writing to
-    protected BufferedWriter mWriter;
-    protected PositionalStream positionalStream = null;
-
     // were filters applied?
     protected boolean filtersWereAppliedToContext = false;
-
-    // should we write genotypes or just sites?
-    protected boolean doNotWriteGenotypes = false;
-
-    protected DynamicIndexCreator indexer = null;
-    protected File indexFile = null;
-    LittleEndianOutputStream idxStream = null;
-    File location = null;
 
     /**         
      * create a VCF writer, given a file to write to
      *
      * @param location the file location to write to
      */
-    public StandardVCFWriter(File location) {
-        this(location, openOutputStream(location), true, false);
+    public StandardVCFWriter(final File location, final SAMSequenceDictionary refDict) {
+        this(location, openOutputStream(location), refDict, true, false);
     }
 
-    public StandardVCFWriter(File location, boolean enableOnTheFlyIndexing) {
-        this(location, openOutputStream(location), enableOnTheFlyIndexing, false);
-    }
-
-    /**
-     * create a VCF writer, given a stream to write to
-     *
-     * @param output   the file location to write to
-     */
-    public StandardVCFWriter(OutputStream output) {
-        this(output, false);
+    public StandardVCFWriter(File location, final SAMSequenceDictionary refDict, boolean enableOnTheFlyIndexing) {
+        this(location, openOutputStream(location), refDict, enableOnTheFlyIndexing, false);
     }
 
     /**
@@ -91,44 +77,32 @@ public class StandardVCFWriter implements VCFWriter {
      * @param output   the file location to write to
      * @param doNotWriteGenotypes   do not write genotypes
      */
-    public StandardVCFWriter(OutputStream output, boolean doNotWriteGenotypes) {
-        mWriter = new BufferedWriter(new OutputStreamWriter(output));
+    public StandardVCFWriter(final OutputStream output, final SAMSequenceDictionary refDict, final boolean doNotWriteGenotypes) {
+        this(null, output, refDict, false, doNotWriteGenotypes);
+    }
+
+    public StandardVCFWriter(final File location, final OutputStream output, final SAMSequenceDictionary refDict, final boolean enableOnTheFlyIndexing, boolean doNotWriteGenotypes) {
+        super(writerName(location, output), location, output, refDict, enableOnTheFlyIndexing);
+        mWriter = new BufferedWriter(new OutputStreamWriter(getOutputStream())); // todo -- fix buffer size
         this.doNotWriteGenotypes = doNotWriteGenotypes;
     }
 
-    public StandardVCFWriter(File location, OutputStream output, boolean enableOnTheFlyIndexing, boolean doNotWriteGenotypes) {
-        this.location = location;
+    // --------------------------------------------------------------------------------
+    //
+    // VCFWriter interface functions
+    //
+    // --------------------------------------------------------------------------------
 
-        if ( enableOnTheFlyIndexing ) {
-            indexFile = Tribble.indexFile(location);
-            try {
-                idxStream = new LittleEndianOutputStream(new FileOutputStream(indexFile));
-                //System.out.println("Creating index on the fly for " + location);
-                indexer = new DynamicIndexCreator(IndexFactory.IndexBalanceApproach.FOR_SEEK_TIME);
-                indexer.initialize(location, indexer.defaultBinSize());
-                positionalStream = new PositionalStream(output);
-                output = positionalStream;
-            } catch ( IOException ex ) {
-                // No matter what we keep going, since we don't care if we can't create the index file
-            }
-        }
-
-        //mWriter = new BufferedWriter(new OutputStreamWriter(new PositionalStream(output)));
-        mWriter = new BufferedWriter(new OutputStreamWriter(output));
-        this.doNotWriteGenotypes = doNotWriteGenotypes;
-    }
-
+    @Override
     public void writeHeader(VCFHeader header) {
         mHeader = doNotWriteGenotypes ? new VCFHeader(header.getMetaData()) : header;
         
         try {
             // the file format field needs to be written first
-            mWriter.write(VCFHeader.METADATA_INDICATOR + VCFHeaderVersion.VCF4_0.getFormatString() + "=" + VCFHeaderVersion.VCF4_0.getVersionString() + "\n");
+            mWriter.write(VCFHeader.METADATA_INDICATOR + VCFHeaderVersion.VCF4_1.getFormatString() + "=" + VCFHeaderVersion.VCF4_1.getVersionString() + "\n");
 
             for ( VCFHeaderLine line : mHeader.getMetaData() ) {
-                if ( line.getKey().equals(VCFHeaderVersion.VCF4_0.getFormatString()) ||
-                        line.getKey().equals(VCFHeaderVersion.VCF3_3.getFormatString()) ||
-                        line.getKey().equals(VCFHeaderVersion.VCF3_2.getFormatString()) )
+                if ( VCFHeaderVersion.isFormatString(line.getKey()) )
                     continue;
 
                 // are the records filtered (so we know what to put in the FILTER column of passing records) ?
@@ -159,75 +133,42 @@ public class StandardVCFWriter implements VCFWriter {
             mWriter.flush();  // necessary so that writing to an output stream will work
         }
         catch (IOException e) {
-            throw new TribbleException("IOException writing the VCF header to " + locationString(), e);
+            throw new ReviewedStingException("IOException writing the VCF header to " + getStreamName(), e);
         }
-    }
-
-    private String locationString() {
-        return location == null ? mWriter.toString() : location.getAbsolutePath();
     }
 
     /**
      * attempt to close the VCF file
      */
+    @Override
     public void close() {
         // try to close the vcf stream
         try {
             mWriter.flush();
             mWriter.close();
         } catch (IOException e) {
-            throw new TribbleException("Unable to close " + locationString() + " because of " + e.getMessage());
+            throw new ReviewedStingException("Unable to close " + getStreamName(), e);
         }
 
-        // try to close the index stream (keep it separate to help debugging efforts)
-        if ( indexer != null ) {
-            try {
-                Index index = indexer.finalizeIndex(positionalStream.getPosition());
-                index.write(idxStream);
-                idxStream.close();
-            } catch (IOException e) {
-                throw new TribbleException("Unable to close index for " + locationString() + " because of " + e.getMessage());
-            }
-        }
-    }
-
-    protected static OutputStream openOutputStream(File location) {
-        try {
-            return new FileOutputStream(location);
-        } catch (FileNotFoundException e) {
-            throw new TribbleException("Unable to create VCF file at location: " + location);
-        }
+        super.close();
     }
 
     /**
      * add a record to the file
      *
      * @param vc      the Variant Context object
-     * @param refBase the ref base used for indels
      */
-    public void add(VariantContext vc, byte refBase) {
-        add(vc, refBase, false);
-    }
-
-    /**
-     * add a record to the file
-     *
-     * @param vc      the Variant Context object
-     * @param refBase the ref base used for indels
-     * @param refBaseShouldBeAppliedToEndOfAlleles *** THIS SHOULD BE FALSE EXCEPT FOR AN INDEL AT THE EXTREME BEGINNING OF A CONTIG (WHERE THERE IS NO PREVIOUS BASE, SO WE USE THE BASE AFTER THE EVENT INSTEAD)
-     */
-    public void add(VariantContext vc, byte refBase, boolean refBaseShouldBeAppliedToEndOfAlleles) {
+    @Override
+    public void add(VariantContext vc) {
         if ( mHeader == null )
-            throw new IllegalStateException("The VCF Header must be written before records can be added: " + locationString());
+            throw new IllegalStateException("The VCF Header must be written before records can be added: " + getStreamName());
 
         if ( doNotWriteGenotypes )
             vc = VariantContext.modifyGenotypes(vc, null);
 
         try {
-            vc = VariantContext.createVariantContextWithPaddedAlleles(vc, refBase, refBaseShouldBeAppliedToEndOfAlleles);
-
-            // if we are doing on the fly indexing, add the record ***before*** we write any bytes 
-            if ( indexer != null ) indexer.addFeature(vc, positionalStream.getPosition());
+            vc = VariantContext.createVariantContextWithPaddedAlleles(vc, false);
+            super.add(vc);
 
             Map<Allele, String> alleleMap = new HashMap<Allele, String>(vc.getAlleles().size());
             alleleMap.put(Allele.NO_CALL, VCFConstants.EMPTY_ALLELE); // convenience for lookup
@@ -278,7 +219,7 @@ public class StandardVCFWriter implements VCFWriter {
             mWriter.write(VCFConstants.FIELD_SEPARATOR);
 
             // FILTER
-            String filters = vc.isFiltered() ? ParsingUtils.join(";", ParsingUtils.sortList(vc.getFilters())) : (filtersWereAppliedToContext || vc.filtersWereApplied() ? VCFConstants.PASSES_FILTERS_v4 : VCFConstants.UNFILTERED);
+            String filters = getFilterString(vc, filtersWereAppliedToContext);
             mWriter.write(filters);
             mWriter.write(VCFConstants.FIELD_SEPARATOR);
 
@@ -286,7 +227,7 @@ public class StandardVCFWriter implements VCFWriter {
             Map<String, String> infoFields = new TreeMap<String, String>();
             for ( Map.Entry<String, Object> field : vc.getAttributes().entrySet() ) {
                 String key = field.getKey();
-                if ( key.equals(VariantContext.ID_KEY) || key.equals(VariantContext.REFERENCE_BASE_FOR_INDEL_KEY) || key.equals(VariantContext.UNPARSED_GENOTYPE_MAP_KEY) || key.equals(VariantContext.UNPARSED_GENOTYPE_PARSER_KEY) )
+                if ( key.equals(VariantContext.ID_KEY) || key.equals(VariantContext.UNPARSED_GENOTYPE_MAP_KEY) || key.equals(VariantContext.UNPARSED_GENOTYPE_PARSER_KEY) )
                     continue;
 
                 String outputValue = formatVCFField(field.getValue());
@@ -302,10 +243,7 @@ public class StandardVCFWriter implements VCFWriter {
             } else {
                 List<String> genotypeAttributeKeys = new ArrayList<String>();
                 if ( vc.hasGenotypes() ) {
-                    genotypeAttributeKeys.add(VCFConstants.GENOTYPE_KEY);
-                    for ( String key : calcVCFGenotypeKeys(vc) ) {
-                        genotypeAttributeKeys.add(key);
-                    }
+                    genotypeAttributeKeys.addAll(calcVCFGenotypeKeys(vc));
                 } else if ( mHeader.hasGenotypingData() ) {
                     // this needs to be done in case all samples are no-calls
                     genotypeAttributeKeys.add(VCFConstants.GENOTYPE_KEY);
@@ -323,9 +261,22 @@ public class StandardVCFWriter implements VCFWriter {
             mWriter.write("\n");
             mWriter.flush();  // necessary so that writing to an output stream will work
         } catch (IOException e) {
-            throw new RuntimeException("Unable to write the VCF object to " + locationString());
+            throw new RuntimeException("Unable to write the VCF object to " + getStreamName());
         }
+    }
 
+    // --------------------------------------------------------------------------------
+    //
+    // implementation functions
+    //
+    // --------------------------------------------------------------------------------
+
+    public static final String getFilterString(final VariantContext vc) {
+        return getFilterString(vc, false);
+    }
+
+    public static final String getFilterString(final VariantContext vc, boolean forcePASS) {
+        return vc.isFiltered() ? ParsingUtils.join(";", ParsingUtils.sortList(vc.getFilters())) : (forcePASS || vc.filtersWereApplied() ? VCFConstants.PASSES_FILTERS_v4 : VCFConstants.UNFILTERED);
     }
 
     private String getQualValue(double qual) {
@@ -358,16 +309,8 @@ public class StandardVCFWriter implements VCFWriter {
             mWriter.write(key);
 
             if ( !entry.getValue().equals("") ) {
-                int numVals = 1;
                 VCFInfoHeaderLine metaData = mHeader.getInfoHeaderLine(key);
-                if ( metaData != null )
-                    numVals = metaData.getCount();
-
-                // take care of unbounded encoding
-                if ( numVals == VCFInfoHeaderLine.UNBOUNDED )
-                    numVals = 1;
-
-                if ( numVals > 0 ) {
+                if ( metaData == null || metaData.getCountType() != VCFHeaderLineCount.INTEGER || metaData.getCount() != 0 ) {
                     mWriter.write("=");
                     mWriter.write(entry.getValue());
                 }
@@ -397,16 +340,22 @@ public class StandardVCFWriter implements VCFWriter {
                 continue;
             }
 
-            writeAllele(g.getAllele(0), alleleMap);
-            for (int i = 1; i < g.getPloidy(); i++) {
-                mWriter.write(g.isPhased() ? VCFConstants.PHASED : VCFConstants.UNPHASED);
-                writeAllele(g.getAllele(i), alleleMap);
-            }
-
             List<String> attrs = new ArrayList<String>(genotypeFormatKeys.size());
             for ( String key : genotypeFormatKeys ) {
-                if ( key.equals(VCFConstants.GENOTYPE_KEY) )
+
+                if ( key.equals(VCFConstants.GENOTYPE_KEY) ) {
+                    if ( !g.isAvailable() ) {
+                        throw new ReviewedStingException("GTs cannot be missing for some samples if they are available for others in the record");
+                    }
+
+                    writeAllele(g.getAllele(0), alleleMap);
+                    for (int i = 1; i < g.getPloidy(); i++) {
+                        mWriter.write(g.isPhased() ? VCFConstants.PHASED : VCFConstants.UNPHASED);
+                        writeAllele(g.getAllele(i), alleleMap);
+                    }
+
                     continue;
+                }
 
                 Object val = g.hasAttribute(key) ? g.getAttribute(key) : VCFConstants.MISSING_VALUE_v4;
 
@@ -423,7 +372,7 @@ public class StandardVCFWriter implements VCFWriter {
 
                 VCFFormatHeaderLine metaData = mHeader.getFormatHeaderLine(key);
                 if ( metaData != null ) {
-                    int numInFormatField = metaData.getCount();
+                    int numInFormatField = metaData.getCount(vc.getAlternateAlleles().size());
                     if ( numInFormatField > 1 && val.equals(VCFConstants.MISSING_VALUE_v4) ) {
                         // If we have a missing field but multiple values are expected, we need to construct a new string with all fields.
                         // For example, if Number=2, the string has to be ".,."
@@ -450,9 +399,10 @@ public class StandardVCFWriter implements VCFWriter {
                     break;
             }
 
-            for (String s : attrs ) {
-                mWriter.write(VCFConstants.GENOTYPE_FIELD_SEPARATOR);
-                mWriter.write(s);
+            for (int i = 0; i < attrs.size(); i++) {
+                if ( i > 0 || genotypeFormatKeys.contains(VCFConstants.GENOTYPE_KEY) )
+                    mWriter.write(VCFConstants.GENOTYPE_FIELD_SEPARATOR);
+                mWriter.write(attrs.get(i));
             }
         }
     }
@@ -469,7 +419,7 @@ public class StandardVCFWriter implements VCFWriter {
         mWriter.write(encoding);
     }
 
-    private static String formatVCFField(Object val) {
+    public static String formatVCFField(Object val) {
         String result;
         if ( val == null )
             result = VCFConstants.MISSING_VALUE_v4;
@@ -498,10 +448,13 @@ public class StandardVCFWriter implements VCFWriter {
     private static List<String> calcVCFGenotypeKeys(VariantContext vc) {
         Set<String> keys = new HashSet<String>();
 
+        boolean sawGoodGT = false;
         boolean sawGoodQual = false;
         boolean sawGenotypeFilter = false;
         for ( Genotype g : vc.getGenotypes().values() ) {
             keys.addAll(g.getAttributes().keySet());
+            if ( g.isAvailable() )
+                sawGoodGT = true;
             if ( g.hasNegLog10PError() )
                 sawGoodQual = true;
             if (g.isFiltered() && g.isCalled())
@@ -514,16 +467,25 @@ public class StandardVCFWriter implements VCFWriter {
         if (sawGenotypeFilter)
             keys.add(VCFConstants.GENOTYPE_FILTER_KEY);
 
-        return ParsingUtils.sortList(new ArrayList<String>(keys));
+        List<String> sortedList = ParsingUtils.sortList(new ArrayList<String>(keys));
+
+        // make sure the GT is first
+        if ( sawGoodGT ) {
+            List<String> newList = new ArrayList<String>(sortedList.size()+1);
+            newList.add(VCFConstants.GENOTYPE_KEY);
+            newList.addAll(sortedList);
+            sortedList = newList;
+        }
+
+        return sortedList;
     }
 
 
-    public static int countOccurrences(char c, String s) {
+    private static int countOccurrences(char c, String s) {
            int count = 0;
            for (int i = 0; i < s.length(); i++) {
                count += s.charAt(i) == c ? 1 : 0;
            }
            return count;
     }
-
 }

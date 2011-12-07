@@ -36,15 +36,12 @@ class VcfGatherFunction extends CombineVariants with GatherFunction {
   private lazy val originalGATK = this.originalFunction.asInstanceOf[CommandLineGATK]
 
   override def freezeFieldValues {
-    this.memoryLimit = Some(1)
-
     this.jarFile = this.originalGATK.jarFile
     this.reference_sequence = this.originalGATK.reference_sequence
     this.intervals = this.originalGATK.intervals
     this.intervalsString = this.originalGATK.intervalsString
 
-    this.rodBind = this.gatherParts.zipWithIndex map { case (input, index) => new RodBind("input"+index, "VCF", input) }
-    this.rod_priority_list = (0 until this.gatherParts.size).map("input"+_).mkString(",")
+    this.variant = this.gatherParts.zipWithIndex map { case (input, index) => new TaggedFile(input, "input"+index) }
     this.out = this.originalOutput
     this.assumeIdenticalSamples = true
 

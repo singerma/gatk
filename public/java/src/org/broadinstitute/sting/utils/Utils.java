@@ -25,12 +25,12 @@
 
 package org.broadinstitute.sting.utils;
 
-import java.util.*;
-
 import net.sf.samtools.util.StringUtil;
-
 import org.apache.log4j.Logger;
 import org.broadinstitute.sting.utils.collections.Pair;
+
+import java.net.InetAddress;
+import java.util.*;
 
 /**
  * Created by IntelliJ IDEA.
@@ -43,32 +43,20 @@ public class Utils {
     /** our log, which we want to capture anything from this class */
     private static Logger logger = Logger.getLogger(Utils.class);
 
-    public static String getClassName(Class c) {
-        String FQClassName = c.getName();
-        int firstChar;
-        firstChar = FQClassName.lastIndexOf ('.') + 1;
-        if ( firstChar > 0 ) {
-            FQClassName = FQClassName.substring ( firstChar );
-        }
-        return FQClassName;
+    public static final float JAVA_DEFAULT_HASH_LOAD_FACTOR = 0.75f;
+
+    /**
+     * Calculates the optimum initial size for a hash table given the maximum number
+     * of elements it will need to hold. The optimum size is the smallest size that
+     * is guaranteed not to result in any rehash/table-resize operations.
+     *
+     * @param maxElements  The maximum number of elements you expect the hash table
+     *                     will need to hold
+     * @return             The optimum initial size for the table, given maxElements
+     */
+    public static int optimumHashSize ( int maxElements ) {
+        return (int)(maxElements / JAVA_DEFAULT_HASH_LOAD_FACTOR) + 2;
     }
-
-
-    // returns package and class name
-    public static String getFullClassName(Class c) {
-        return  c.getName();
-    }
-
-    // returns the package without the classname, empty string if
-    // there is no package
-    public static String getPackageName(Class c) {
-        String fullyQualifiedName = c.getName();
-        int lastDot = fullyQualifiedName.lastIndexOf ('.');
-        if (lastDot==-1){ return ""; }
-        return fullyQualifiedName.substring (0, lastDot);
-    }
-
-
 
     /**
      * Compares two objects, either of which might be null.
@@ -92,20 +80,24 @@ public class Utils {
     }
 
     public static void warnUser(final String msg) {
+        warnUser(logger, msg);
+    }
+    
+    public static void warnUser(final Logger logger, final String msg) {
         logger.warn(String.format("********************************************************************************"));
         logger.warn(String.format("* WARNING:"));
         logger.warn(String.format("*"));
-        prettyPrintWarningMessage(msg);
+        prettyPrintWarningMessage(logger, msg);
         logger.warn(String.format("********************************************************************************"));
     }
-    
 
     /**
      * pretty print the warning message supplied
      *
+     * @param logger logger for the message
      * @param message the message
      */
-    private static void prettyPrintWarningMessage(String message) {
+    private static void prettyPrintWarningMessage(Logger logger, String message) {
         StringBuilder builder = new StringBuilder(message);
         while (builder.length() > 70) {
             int space = builder.lastIndexOf(" ", 70);
@@ -225,22 +217,34 @@ public class Utils {
         return ret.toString();
     }
 
-    //public static String join(String separator, Collection<String> strings) {
-    //    return join( separator, strings.toArray(new String[0]) );
-    //}
-
-    public static <T> String join(String separator, Collection<T> objects) {
-        if(objects.isEmpty()) {
+    /**
+     * Returns a string of the form elt1.toString() [sep elt2.toString() ... sep elt.toString()] for a collection of
+     * elti objects (note there's no actual space between sep and the elti elements).  Returns
+     * "" if collection is empty.  If collection contains just elt, then returns elt.toString()
+     *
+     * @param separator the string to use to separate objects
+     * @param objects a collection of objects.  the element order is defined by the iterator over objects
+     * @param <T> the type of the objects
+     * @return a non-null string
+     */
+    public static <T> String join(final String separator, final Collection<T> objects) {
+        if (objects.isEmpty()) { // fast path for empty collection
             return "";
-        }
-        Iterator<T> iter = objects.iterator();
-        final StringBuilder ret = new StringBuilder(iter.next().toString());
-        while(iter.hasNext()) {
-            ret.append(separator);
-            ret.append(iter.next().toString());
-        }
+        } else {
+            final Iterator<T> iter = objects.iterator();
+            final T first = iter.next();
 
-        return ret.toString();
+            if ( ! iter.hasNext() ) // fast path for singleton collections
+                return first.toString();
+            else { // full path for 2+ collection that actually need a join
+                final StringBuilder ret = new StringBuilder(first.toString());
+                while(iter.hasNext()) {
+                    ret.append(separator);
+                    ret.append(iter.next().toString());
+                }
+                return ret.toString();
+            }
+        }
     }
 
     public static String dupString(char c, int nCopies) {
@@ -582,6 +586,12 @@ public class Utils {
         return rcbases;
     }
 
+    static public final <T> List<T> reverse(final List<T> l) {
+        final List<T> newL = new ArrayList<T>(l);
+        Collections.reverse(newL);
+        return newL;
+    }
+
     /**
      * Reverse an int array of bases
      *
@@ -618,5 +628,21 @@ public class Utils {
 
     public static boolean isFlagSet(int value, int flag) {
         return ((value & flag) == flag);
+    }
+
+    /**
+     * Helper utility that calls into the InetAddress system to resolve the hostname.  If this fails,
+     * unresolvable gets returned instead.
+     *
+     * @return
+     */
+    public static final String resolveHostname() {
+        try {
+            return InetAddress.getLocalHost().getCanonicalHostName();
+        }
+        catch (java.net.UnknownHostException uhe) { // [beware typo in code sample -dmw]
+            return "unresolvable";
+            // handle exception
+        }
     }
 }

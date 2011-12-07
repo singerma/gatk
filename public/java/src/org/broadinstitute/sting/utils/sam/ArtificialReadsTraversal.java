@@ -1,15 +1,13 @@
 package org.broadinstitute.sting.utils.sam;
 
-import org.broadinstitute.sting.gatk.traversals.TraversalEngine;
-import org.broadinstitute.sting.gatk.walkers.Walker;
-import org.broadinstitute.sting.gatk.walkers.ReadWalker;
-import org.broadinstitute.sting.gatk.datasources.providers.ShardDataProvider;
-import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
-import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
-import org.apache.log4j.Logger;
-
-import net.sf.samtools.SAMRecord;
 import net.sf.samtools.SAMFileHeader;
+import net.sf.samtools.SAMRecord;
+import org.apache.log4j.Logger;
+import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
+import org.broadinstitute.sting.gatk.datasources.providers.ShardDataProvider;
+import org.broadinstitute.sting.gatk.traversals.TraversalEngine;
+import org.broadinstitute.sting.gatk.walkers.ReadWalker;
+import org.broadinstitute.sting.gatk.walkers.Walker;
 
 
 /*
@@ -106,9 +104,9 @@ public class ArtificialReadsTraversal<M,T> extends TraversalEngine<M,T,Walker<M,
             // an array of characters that represent the reference
             ReferenceContext refSeq = null;
 
-            final boolean keepMeP = readWalker.filter(refSeq, read);
+            final boolean keepMeP = readWalker.filter(refSeq, (GATKSAMRecord) read);
             if (keepMeP) {
-                M x = readWalker.map(refSeq, read, null);  // TODO: fix me at some point, it would be nice to fake out ROD data too
+                M x = readWalker.map(refSeq, (GATKSAMRecord) read, null);  // TODO: fix me at some point, it would be nice to fake out ROD data too
                 sum = readWalker.reduce(x, sum);
             }
         }

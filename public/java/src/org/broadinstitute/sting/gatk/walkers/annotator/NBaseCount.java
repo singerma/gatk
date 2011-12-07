@@ -1,14 +1,15 @@
 package org.broadinstitute.sting.gatk.walkers.annotator;
 
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLineType;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFInfoHeaderLine;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
 import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
+import org.broadinstitute.sting.gatk.walkers.annotator.interfaces.AnnotatorCompatibleWalker;
 import org.broadinstitute.sting.gatk.walkers.annotator.interfaces.InfoFieldAnnotation;
 import org.broadinstitute.sting.utils.BaseUtils;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLineType;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFInfoHeaderLine;
 import org.broadinstitute.sting.utils.pileup.PileupElement;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -16,13 +17,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Created by IntelliJ IDEA.
- * User: rpoplin
- * Date: 5/16/11
+ * The number of N bases, counting only SOLiD data
  */
-
-public class NBaseCount implements InfoFieldAnnotation {
-    public Map<String, Object> annotate(RefMetaDataTracker tracker, ReferenceContext ref, Map<String, AlignmentContext> stratifiedContexts, VariantContext vc) {
+public class NBaseCount extends InfoFieldAnnotation {
+    public Map<String, Object> annotate(RefMetaDataTracker tracker, AnnotatorCompatibleWalker walker, ReferenceContext ref, Map<String, AlignmentContext> stratifiedContexts, VariantContext vc) {
         if( stratifiedContexts.size() == 0 )
             return null;
 
@@ -47,5 +45,5 @@ public class NBaseCount implements InfoFieldAnnotation {
 
     public List<String> getKeyNames() { return Arrays.asList("PercentNBaseSolid"); }
 
-    public List<VCFInfoHeaderLine> getDescriptions() { return Arrays.asList(new VCFInfoHeaderLine("PercentNBaseSolid", 4, VCFHeaderLineType.Float, "Percentage of N bases in the pileup (counting only SOLiD reads)")); }
+    public List<VCFInfoHeaderLine> getDescriptions() { return Arrays.asList(new VCFInfoHeaderLine("PercentNBaseSolid", 1, VCFHeaderLineType.Float, "Percentage of N bases in the pileup (counting only SOLiD reads)")); }
 }

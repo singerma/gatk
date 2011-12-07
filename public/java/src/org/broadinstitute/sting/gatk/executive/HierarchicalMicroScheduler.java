@@ -1,26 +1,27 @@
 package org.broadinstitute.sting.gatk.executive;
 
+import net.sf.picard.reference.IndexedFastaSequenceFile;
+import org.broad.tribble.TribbleException;
+import org.broadinstitute.sting.gatk.GenomeAnalysisEngine;
 import org.broadinstitute.sting.gatk.datasources.reads.SAMDataSource;
 import org.broadinstitute.sting.gatk.datasources.reads.Shard;
-import org.broadinstitute.sting.gatk.walkers.Walker;
-import org.broadinstitute.sting.gatk.walkers.TreeReducible;
 import org.broadinstitute.sting.gatk.datasources.reads.ShardStrategy;
 import org.broadinstitute.sting.gatk.datasources.rmd.ReferenceOrderedDataSource;
-import org.broadinstitute.sting.gatk.io.*;
-import org.broadinstitute.sting.gatk.GenomeAnalysisEngine;
+import org.broadinstitute.sting.gatk.io.OutputTracker;
+import org.broadinstitute.sting.gatk.io.ThreadLocalOutputTracker;
+import org.broadinstitute.sting.gatk.walkers.TreeReducible;
+import org.broadinstitute.sting.gatk.walkers.Walker;
 import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
 import org.broadinstitute.sting.utils.exceptions.UserException;
 import org.broadinstitute.sting.utils.threading.ThreadPoolMonitor;
 
-import java.util.Queue;
-import java.util.LinkedList;
 import java.util.Collection;
-import java.util.concurrent.Executors;
+import java.util.LinkedList;
+import java.util.Queue;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
-
-import net.sf.picard.reference.IndexedFastaSequenceFile;
 
 /**
  * A microscheduler that schedules shards according to a tree-like structure.
@@ -84,12 +85,7 @@ public class HierarchicalMicroScheduler extends MicroScheduler implements Hierar
      */
     protected HierarchicalMicroScheduler(GenomeAnalysisEngine engine, Walker walker, SAMDataSource reads, IndexedFastaSequenceFile reference, Collection<ReferenceOrderedDataSource> rods, int nThreadsToUse ) {
         super(engine, walker, reads, reference, rods);
-
         this.threadPool = Executors.newFixedThreadPool(nThreadsToUse);
-
-        if (engine.getArguments().processingTrackerFile != null) {
-            throw new UserException.BadArgumentValue("-C", "Distributed GATK calculations currently not supported in multi-threaded mode.  Complain to Mark depristo@broadinstitute.org to implement and test this code path");
-        }
     }
 
     public Object execute( Walker walker, ShardStrategy shardStrategy ) {
@@ -97,7 +93,6 @@ public class HierarchicalMicroScheduler extends MicroScheduler implements Hierar
         if (!( walker instanceof TreeReducible ))
             throw new IllegalArgumentException("The GATK can currently run in parallel only with TreeReducible walkers");
 
-        traversalEngine.startTimers();
         ReduceTree reduceTree = new ReduceTree(this);
         initializeWalker(walker);
 
@@ -264,8 +259,17 @@ public class HierarchicalMicroScheduler extends MicroScheduler implements Hierar
                 traverser.waitForComplete();
 
             OutputMergeTask mergeTask = traverser.getOutputMergeTask();
-            if( mergeTask != null )
-                mergeTask.merge();
+            if( mergeTask != null ) {
+                try {
+                    mergeTask.merge();
+                }
+                catch(TribbleException ex) {
+                    // Specifically catch Tribble I/O exceptions and rethrow them as Reviewed.  We don't expect
+                    // any issues here because we created the Tribble output file mere moments ago and expect it to
+                    // be completely valid.
+                    throw new ReviewedStingException("Unable to merge temporary Tribble output file.",ex);
+                }
+            }
         }
 
         long endTime = System.currentTimeMillis();

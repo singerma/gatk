@@ -1,16 +1,18 @@
 package org.broadinstitute.sting.gatk.traversals;
 
-import org.broadinstitute.sting.gatk.walkers.Requires;
-import org.broadinstitute.sting.gatk.walkers.DataSource;
-import org.broadinstitute.sting.gatk.walkers.ReadPairWalker;
+import net.sf.samtools.SAMRecord;
+import net.sf.samtools.SAMRecordCoordinateComparator;
+import org.apache.log4j.Logger;
 import org.broadinstitute.sting.gatk.datasources.providers.ReadShardDataProvider;
 import org.broadinstitute.sting.gatk.datasources.providers.ReadView;
 import org.broadinstitute.sting.gatk.datasources.reads.Shard;
-import org.apache.log4j.Logger;
-import net.sf.samtools.SAMRecord;
-import net.sf.samtools.SAMRecordCoordinateComparator;
+import org.broadinstitute.sting.gatk.walkers.DataSource;
+import org.broadinstitute.sting.gatk.walkers.ReadPairWalker;
+import org.broadinstitute.sting.gatk.walkers.Requires;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Traverse over a collection of read pairs, assuming that a given shard will contain all pairs.
@@ -48,7 +50,9 @@ public class TraverseReadPairs<M,T> extends TraversalEngine<M,T, ReadPairWalker<
         ReadView reads = new ReadView(dataProvider);
         List<SAMRecord> pairs = new ArrayList<SAMRecord>();
 
+        boolean done = walker.isDone();
         for(SAMRecord read: reads) {
+            if ( done ) break;
             dataProvider.getShard().getReadMetrics().incrementNumReadsSeen();
 
             if(pairs.size() == 0 || pairs.get(0).getReadName().equals(read.getReadName())) {
@@ -63,6 +67,8 @@ public class TraverseReadPairs<M,T> extends TraversalEngine<M,T, ReadPairWalker<
 
                 printProgress(dataProvider.getShard(),null);
             }
+
+            done = walker.isDone();
         }
 
         // If any data was left in the queue, process it.

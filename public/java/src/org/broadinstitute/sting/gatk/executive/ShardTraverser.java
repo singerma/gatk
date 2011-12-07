@@ -1,13 +1,13 @@
 package org.broadinstitute.sting.gatk.executive;
 
 import org.apache.log4j.Logger;
-import org.broadinstitute.sting.gatk.datasources.providers.ShardDataProvider;
 import org.broadinstitute.sting.gatk.datasources.providers.LocusShardDataProvider;
+import org.broadinstitute.sting.gatk.datasources.providers.ShardDataProvider;
 import org.broadinstitute.sting.gatk.datasources.reads.Shard;
-import org.broadinstitute.sting.gatk.traversals.TraversalEngine;
 import org.broadinstitute.sting.gatk.io.ThreadLocalOutputTracker;
-import org.broadinstitute.sting.gatk.walkers.Walker;
+import org.broadinstitute.sting.gatk.traversals.TraversalEngine;
 import org.broadinstitute.sting.gatk.walkers.LocusWalker;
+import org.broadinstitute.sting.gatk.walkers.Walker;
 import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
 
 import java.util.concurrent.Callable;
@@ -57,20 +57,22 @@ public class ShardTraverser implements Callable {
 
     public Object call() {
         try {
+            traversalEngine.startTimersIfNecessary();
             long startTime = System.currentTimeMillis();
 
             Object accumulator = walker.reduceInit();
             LocusWalker lWalker = (LocusWalker)walker;
-            WindowMaker windowMaker = new WindowMaker(shard,microScheduler.getEngine().getGenomeLocParser(),microScheduler.getReadIterator(shard),shard.getGenomeLocs(), microScheduler.engine.getSampleMetadata()); // todo: microScheduler.engine is protected - is it okay to user it here?
-            ShardDataProvider dataProvider = null;
+            WindowMaker windowMaker = new WindowMaker(shard,microScheduler.getEngine().getGenomeLocParser(),
+                    microScheduler.getReadIterator(shard),
+                    shard.getGenomeLocs(),
+                    microScheduler.engine.getSampleDB().getSampleNames()); // todo: microScheduler.engine is protected - is it okay to user it here?
 
             for(WindowMaker.WindowMakerIterator iterator: windowMaker) {
-                dataProvider = new LocusShardDataProvider(shard,iterator.getSourceInfo(),microScheduler.getEngine().getGenomeLocParser(),iterator.getLocus(),iterator,microScheduler.reference,microScheduler.rods);
+                final ShardDataProvider dataProvider = new LocusShardDataProvider(shard,iterator.getSourceInfo(),microScheduler.getEngine().getGenomeLocParser(),iterator.getLocus(),iterator,microScheduler.reference,microScheduler.rods);
                 accumulator = traversalEngine.traverse( walker, dataProvider, accumulator );
                 dataProvider.close();
             }
 
-            if (dataProvider != null) dataProvider.close();
             windowMaker.close();
             outputMergeTask = outputTracker.closeStorage();
 

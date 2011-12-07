@@ -25,57 +25,122 @@
 
 package org.broadinstitute.sting.gatk.walkers.indels;
 
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
+import org.broadinstitute.sting.commandline.Argument;
+import org.broadinstitute.sting.commandline.Input;
+import org.broadinstitute.sting.commandline.Output;
+import org.broadinstitute.sting.commandline.RodBinding;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
 import org.broadinstitute.sting.gatk.filters.BadCigarFilter;
-import org.broadinstitute.sting.gatk.filters.Platform454Filter;
-import org.broadinstitute.sting.gatk.filters.ZeroMappingQualityReadFilter;
 import org.broadinstitute.sting.gatk.filters.BadMateFilter;
+import org.broadinstitute.sting.gatk.filters.MappingQualityZeroFilter;
+import org.broadinstitute.sting.gatk.filters.Platform454Filter;
 import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
 import org.broadinstitute.sting.gatk.walkers.*;
 import org.broadinstitute.sting.utils.GenomeLoc;
 import org.broadinstitute.sting.utils.baq.BAQ;
-import org.broadinstitute.sting.commandline.Argument;
-import org.broadinstitute.sting.commandline.Output;
 import org.broadinstitute.sting.utils.exceptions.UserException;
 import org.broadinstitute.sting.utils.pileup.ExtendedEventPileupElement;
 import org.broadinstitute.sting.utils.pileup.PileupElement;
 import org.broadinstitute.sting.utils.pileup.ReadBackedExtendedEventPileup;
 import org.broadinstitute.sting.utils.pileup.ReadBackedPileup;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
-import java.util.ArrayList;
 import java.io.PrintStream;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.TreeSet;
 
 /**
- * Emits intervals for the Local Indel Realigner to target for cleaning.  Ignores 454 reads, MQ0 reads, and reads with consecutive indel operators in the CIGAR string.
+ * Emits intervals for the Local Indel Realigner to target for realignment.
+ *
+ * <p>
+ * The local realignment tool is designed to consume one or more BAM files and to locally realign reads such that the number of mismatching bases
+ * is minimized across all the reads. In general, a large percent of regions requiring local realignment are due to the presence of an insertion
+ * or deletion (indels) in the individual's genome with respect to the reference genome.  Such alignment artifacts result in many bases mismatching
+ * the reference near the misalignment, which are easily mistaken as SNPs.  Moreover, since read mapping algorithms operate on each read independently,
+ * it is impossible to place reads on the reference genome such at mismatches are minimized across all reads.  Consequently, even when some reads are
+ * correctly mapped with indels, reads covering the indel near just the start or end of the read are often incorrectly mapped with respect the true indel,
+ * also requiring realignment.  Local realignment serves to transform regions with misalignments due to indels into clean reads containing a consensus
+ * indel suitable for standard variant discovery approaches.  Unlike most mappers, this walker uses the full alignment context to determine whether an
+ * appropriate alternate reference (i.e. indel) exists.  Following local realignment, the GATK tool Unified Genotyper can be used to sensitively and
+ * specifically identify indels.
+ * <p>
+ *     <ol>There are 2 steps to the realignment process:
+ *     <li>Determining (small) suspicious intervals which are likely in need of realignment (RealignerTargetCreator)</li>
+ *     <li>Running the realigner over those intervals (see the IndelRealigner tool)</li>
+ *     </ol>
+ *     <p>
+ * An important note: the input bam(s), reference, and known indel file(s) should be the same ones to be used for the IndelRealigner step.
+ * <p>
+ * Another important note: because reads produced from the 454 technology inherently contain false indels, the realigner will not currently work with them
+ * (or with reads from similar technologies).   This tool also ignores MQ0 reads and reads with consecutive indel operators in the CIGAR string.
+ *
+ * <h2>Input</h2>
+ * <p>
+ * One or more aligned BAM files and optionally one or more lists of known indels.
+ * </p>
+ *
+ * <h2>Output</h2>
+ * <p>
+ * A list of target intervals to pass to the Indel Realigner.
+ * </p>
+ *
+ * <h2>Examples</h2>
+ * <pre>
+ * java -Xmx2g -jar GenomeAnalysisTK.jar \
+ *   -I input.bam \
+ *   -R ref.fasta \
+ *   -T RealignerTargetCreator \
+ *   -o forIndelRealigner.intervals \
+ *   [--known /path/to/indels.vcf]
+ * </pre>
+ *
+ * @author ebanks
  */
-@ReadFilters({Platform454Filter.class, ZeroMappingQualityReadFilter.class, BadCigarFilter.class})
+@ReadFilters({Platform454Filter.class, MappingQualityZeroFilter.class, BadCigarFilter.class})
 @Reference(window=@Window(start=-1,stop=50))
 @Allows(value={DataSource.READS, DataSource.REFERENCE})
 @By(DataSource.REFERENCE)
 @BAQMode(ApplicationTime = BAQ.ApplicationTime.FORBIDDEN)
-public class RealignerTargetCreator extends RodWalker<RealignerTargetCreator.Event, RealignerTargetCreator.Event> {
+public class RealignerTargetCreator extends RodWalker<RealignerTargetCreator.Event, RealignerTargetCreator.EventPair> implements TreeReducible<RealignerTargetCreator.EventPair> {
+
+    /**
+     * The target intervals for realignment.
+     */
     @Output
     protected PrintStream out;
 
-    // mismatch/entropy/SNP arguments
+    /**
+     * Any number of VCF files representing known SNPs and/or indels.  Could be e.g. dbSNP and/or official 1000 Genomes indel calls.
+     * SNPs in these files will be ignored unless the --mismatchFraction argument is used.
+     */
+    @Input(fullName="known", shortName = "known", doc="Input VCF file with known indels", required=false)
+    public List<RodBinding<VariantContext>> known = Collections.emptyList();
+
+    /**
+     * Any two SNP calls and/or high entropy positions are considered clustered when they occur no more than this many basepairs apart.
+     */
     @Argument(fullName="windowSize", shortName="window", doc="window size for calculating entropy or SNP clusters", required=false)
     protected int windowSize = 10;
 
-    @Argument(fullName="mismatchFraction", shortName="mismatch", doc="fraction of base qualities needing to mismatch for a position to have high entropy; to disable set to <= 0 or > 1", required=false)
-    protected double mismatchThreshold = 0.15;
+    /**
+     * To disable this behavior, set this value to <= 0 or > 1.  This feature is really only necessary when using an ungapped aligner
+     * (e.g. MAQ in the case of single-end read data) and should be used in conjunction with '--model USE_SW' in the IndelRealigner.
+     */
+    @Argument(fullName="mismatchFraction", shortName="mismatch", doc="fraction of base qualities needing to mismatch for a position to have high entropy", required=false)
+    protected double mismatchThreshold = 0.0;
 
     @Argument(fullName="minReadsAtLocus", shortName="minReads", doc="minimum reads at a locus to enable using the entropy calculation", required=false)
     protected int minReadsAtLocus = 4;
 
-    // interval merging arguments
+    /**
+     * Because the realignment algorithm is N^2, allowing too large an interval might take too long to completely realign.
+     */
     @Argument(fullName="maxIntervalSize", shortName="maxInterval", doc="maximum interval size", required=false)
     protected int maxIntervalSize = 500;
 
-    @Deprecated
-    @Argument(fullName="realignReadsWithBadMates", doc="This argument is no longer used.", required=false)
-    protected boolean DEPRECATED_REALIGN_MATES = false;
 
     @Override
     public boolean generateExtendedEvents() { return true; }
@@ -110,11 +175,11 @@ public class RealignerTargetCreator extends RodWalker<RealignerTargetCreator.Eve
 
         // look at the rods for indels or SNPs
         if ( tracker != null ) {
-            for ( VariantContext vc : tracker.getAllVariantContexts(ref) ) {
+            for ( VariantContext vc : tracker.getValues(known) ) {
                 switch ( vc.getType() ) {
                     case INDEL:
                         hasIndel = true;
-                        if ( vc.isInsertion() )
+                        if ( vc.isSimpleInsertion() )
                             hasInsertion = true;
                         break;
                     case SNP:
@@ -123,7 +188,7 @@ public class RealignerTargetCreator extends RodWalker<RealignerTargetCreator.Eve
                     case MIXED:
                         hasPointEvent = true;
                         hasIndel = true;
-                        if ( vc.isInsertion() )
+                        if ( vc.isSimpleInsertion() )
                             hasInsertion = true;
                         break;
                     default:
@@ -163,7 +228,7 @@ public class RealignerTargetCreator extends RodWalker<RealignerTargetCreator.Eve
             // make sure we're supposed to look for high entropy
             if ( mismatchThreshold > 0.0 &&
                     mismatchThreshold <= 1.0 &&
-                    pileup.size() >= minReadsAtLocus &&
+                    pileup.getNumberOfElements() >= minReadsAtLocus &&
                     (double)mismatchQualities / (double)totalQualities >= mismatchThreshold )
                 hasPointEvent = true;
         }
@@ -187,43 +252,125 @@ public class RealignerTargetCreator extends RodWalker<RealignerTargetCreator.Eve
         return new Event(eventLoc, furthestStopPos, eventType);
     }
 
-    public void onTraversalDone(Event sum) {
-        if ( sum != null && sum.isReportableEvent() )
-            out.println(sum.toString());
+    public void onTraversalDone(EventPair sum) {
+        if ( sum.left != null && sum.left.isReportableEvent() )
+            sum.intervals.add(sum.left.getLoc());
+        if ( sum.right != null && sum.right.isReportableEvent() )
+            sum.intervals.add(sum.right.getLoc());
+
+        for ( GenomeLoc loc : sum.intervals )
+            out.println(loc);
     }
 
-    public Event reduceInit() {
-        return null;
+    public EventPair reduceInit() {
+        return new EventPair(null, null);
     }
 
-    public Event reduce(Event value, Event sum) {
-        // ignore no new events
-        if ( value == null )
-            return sum;
+    public EventPair treeReduce(EventPair lhs, EventPair rhs) {
+        EventPair result;
 
-        // if it's the first good value, use it
-        if ( sum == null )
-            return value;
+        if ( lhs.left == null ) {
+            result = rhs;
+        } else if ( rhs.left == null ) {
+            result = lhs;
+        } else if ( lhs.right == null ) {
+            if ( rhs.right == null ) {
+                if ( canBeMerged(lhs.left, rhs.left) )
+                    result = new EventPair(mergeEvents(lhs.left, rhs.left), null, lhs.intervals, rhs.intervals);
+                else
+                    result = new EventPair(lhs.left, rhs.left, lhs.intervals, rhs.intervals);
+            } else {
+                if ( canBeMerged(lhs.left, rhs.left) )
+                    result = new EventPair(mergeEvents(lhs.left, rhs.left), rhs.right, lhs.intervals, rhs.intervals);
+                else {
+                    if ( rhs.left.isReportableEvent() )
+                        rhs.intervals.add(rhs.left.getLoc());
+                    result = new EventPair(lhs.left, rhs.right, lhs.intervals, rhs.intervals);
+                }
+            }
+        } else if ( rhs.right == null ) {
+            if ( canBeMerged(lhs.right, rhs.left) )
+                result = new EventPair(lhs.left, mergeEvents(lhs.right, rhs.left), lhs.intervals, rhs.intervals);
+            else {
+                if ( lhs.right.isReportableEvent() )
+                    lhs.intervals.add(lhs.right.getLoc());
+                result = new EventPair(lhs.left, rhs.left, lhs.intervals, rhs.intervals);
+            }
+        } else {
+            if ( canBeMerged(lhs.right, rhs.left) ) {
+                Event merge = mergeEvents(lhs.right, rhs.left);
+                if ( merge.isReportableEvent() )
+                    lhs.intervals.add(merge.getLoc());
+            } else {
+                if ( lhs.right.isReportableEvent() )
+                    lhs.intervals.add(lhs.right.getLoc());
+                if ( rhs.left.isReportableEvent() )
+                    rhs.intervals.add(rhs.left.getLoc());
+            }
 
-        // if we hit a new contig or they have no overlapping reads, then they are separate events - so clear sum
-        if ( sum.loc.getContigIndex() != value.loc.getContigIndex() || sum.furthestStopPos < value.loc.getStart() ) {
-            if ( sum.isReportableEvent() )
-                out.println(sum.toString());
-            return value;
+            result = new EventPair(lhs.left, rhs.right, lhs.intervals, rhs.intervals);
         }
 
-        // otherwise, merge the two events
-        sum.merge(value);
+        return result;
+    }
+
+    public EventPair reduce(Event value, EventPair sum) {
+        if ( value == null ) {
+            ; // do nothing
+        } else if ( sum.left == null ) {
+            sum.left = value;
+        } else if ( sum.right == null ) {
+            if ( canBeMerged(sum.left, value) )
+                sum.left = mergeEvents(sum.left, value);
+            else
+                sum.right = value;
+        } else {
+            if ( canBeMerged(sum.right, value) )
+                sum.right = mergeEvents(sum.right, value);
+            else {
+                if ( sum.right.isReportableEvent() )
+                    sum.intervals.add(sum.right.getLoc());
+                sum.right = value;
+            }
+        }
+
         return sum;
+    }
+
+    static private boolean canBeMerged(Event left, Event right) {
+        return left.loc.getContigIndex() == right.loc.getContigIndex() && left.furthestStopPos >= right.loc.getStart();
+    }
+
+    @com.google.java.contract.Requires({"left != null", "right != null"})
+    static private Event mergeEvents(Event left, Event right) {
+        left.merge(right);
+        return left;
     }
 
     private enum EVENT_TYPE { POINT_EVENT, INDEL_EVENT, BOTH }
 
+    class EventPair {
+        public Event left, right;
+        public TreeSet<GenomeLoc> intervals = new TreeSet<GenomeLoc>();
+
+        public EventPair(Event left, Event right) {
+            this.left = left;
+            this.right = right;
+        }
+
+        public EventPair(Event left, Event right, TreeSet<GenomeLoc> set1, TreeSet<GenomeLoc> set2) {
+            this.left = left;
+            this.right = right;
+            intervals.addAll(set1);
+            intervals.addAll(set2);
+        }
+    }
+
     class Event {
         public int furthestStopPos;
 
-        public GenomeLoc loc;
-        public int eventStartPos;
+        private GenomeLoc loc;
+        private int eventStartPos;
         private int eventStopPos;
         private EVENT_TYPE type;
         private ArrayList<Integer> pointEvents = new ArrayList<Integer>();
@@ -268,6 +415,10 @@ public class RealignerTargetCreator extends RodWalker<RealignerTargetCreator.Eve
                             eventStartPos = lastPosition;
                         else
                             eventStartPos = Math.min(eventStartPos, lastPosition);
+                    } else if ( eventStartPos == -1 && e.eventStartPos != -1 ) {
+                        eventStartPos = e.eventStartPos;
+                        eventStopPos = e.eventStopPos;
+                        furthestStopPos = e.furthestStopPos;
                     }
                 }
                 pointEvents.add(newPosition);
@@ -278,8 +429,8 @@ public class RealignerTargetCreator extends RodWalker<RealignerTargetCreator.Eve
             return getToolkit().getGenomeLocParser().isValidGenomeLoc(loc.getContig(), eventStartPos, eventStopPos, true) && eventStopPos >= 0 && eventStopPos - eventStartPos < maxIntervalSize;
         }
 
-        public String toString() {
-            return String.format("%s:%d-%d", loc.getContig(), eventStartPos, eventStopPos);
+        public GenomeLoc getLoc() {
+            return getToolkit().getGenomeLocParser().createGenomeLoc(loc.getContig(), eventStartPos, eventStopPos);
         }
     }
 }

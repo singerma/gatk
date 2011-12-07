@@ -6,15 +6,21 @@ import org.broad.tribble.FeatureCodec;
 import org.broad.tribble.NameAwareCodec;
 import org.broad.tribble.TribbleException;
 import org.broad.tribble.readers.LineReader;
+import org.broad.tribble.util.BlockCompressedInputStream;
 import org.broad.tribble.util.ParsingUtils;
+import org.broadinstitute.sting.gatk.refdata.SelfScopingFeatureCodec;
+import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
+import org.broadinstitute.sting.utils.exceptions.UserException;
 import org.broadinstitute.sting.utils.variantcontext.Allele;
 import org.broadinstitute.sting.utils.variantcontext.Genotype;
 import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
+import java.io.*;
 import java.util.*;
+import java.util.zip.GZIPInputStream;
 
 
-public abstract class AbstractVCFCodec implements FeatureCodec, NameAwareCodec, VCFParser {
+public abstract class AbstractVCFCodec implements FeatureCodec, NameAwareCodec, VCFParser, SelfScopingFeatureCodec {
 
     protected final static Logger log = Logger.getLogger(VCFCodec.class);
     protected final static int NUM_STANDARD_FIELDS = 8;  // INFO is the 8th column
@@ -30,6 +36,7 @@ public abstract class AbstractVCFCodec implements FeatureCodec, NameAwareCodec, 
     // for ParsingUtils.split
     protected String[] GTValueArray = new String[100];
     protected String[] genotypeKeyArray = new String[100];
+    protected String[] infoFieldArray = new String[1000];
     protected String[] infoValueArray = new String[1000];
 
     // for performance testing purposes
@@ -96,6 +103,9 @@ public abstract class AbstractVCFCodec implements FeatureCodec, NameAwareCodec, 
         for ( String str : headerStrings ) {
             if ( !str.startsWith(VCFHeader.METADATA_INDICATOR) ) {
                 String[] strings = str.substring(1).split(VCFConstants.FIELD_SEPARATOR);
+                if ( strings.length < VCFHeader.HEADER_FIELDS.values().length )
+                    throw new TribbleException.InvalidHeader("there are not enough columns present in the header line: " + str);
+
                 int arrayIndex = 0;
                 for (VCFHeader.HEADER_FIELDS field : VCFHeader.HEADER_FIELDS.values()) {
                     try {
@@ -106,14 +116,20 @@ public abstract class AbstractVCFCodec implements FeatureCodec, NameAwareCodec, 
                     }
                     arrayIndex++;
                 }
+
+                boolean sawFormatTag = false;
                 if ( arrayIndex < strings.length ) {
                     if ( !strings[arrayIndex].equals("FORMAT") )
                         throw new TribbleException.InvalidHeader("we were expecting column name 'FORMAT' but we saw '" + strings[arrayIndex] + "'");
+                    sawFormatTag = true;
                     arrayIndex++;
                 }
 
-                while (arrayIndex < strings.length)
+                while ( arrayIndex < strings.length )
                     auxTags.add(strings[arrayIndex++]);
+
+                if ( sawFormatTag && auxTags.size() == 0 )
+                    throw new UserException.MalformedVCFHeader("The FORMAT field was provided but there is no genotype/sample data");
 
             } else {
                 if ( str.startsWith("##INFO=") ) {
@@ -146,8 +162,55 @@ public abstract class AbstractVCFCodec implements FeatureCodec, NameAwareCodec, 
      * @return a feature, (not guaranteed complete) that has the correct start and stop
      */
     public Feature decodeLoc(String line) {
-        return reallyDecode(line);
+        lineNo++;
+
+        // the same line reader is not used for parsing the header and parsing lines, if we see a #, we've seen a header line
+        if (line.startsWith(VCFHeader.HEADER_INDICATOR)) return null;
+
+        // our header cannot be null, we need the genotype sample names and counts
+        if (header == null) throw new ReviewedStingException("VCF Header cannot be null when decoding a record");
+
+        final String[] locParts = new String[6];
+        int nParts = ParsingUtils.split(line, locParts, VCFConstants.FIELD_SEPARATOR_CHAR, true);
+
+        if ( nParts != 6 )
+            throw new UserException.MalformedVCF("there aren't enough columns for line " + line, lineNo);
+
+        // get our alleles (because the end position depends on them)
+        final String ref = getCachedString(locParts[3].toUpperCase());
+        final String alts = getCachedString(locParts[4].toUpperCase());
+        final List<Allele> alleles = parseAlleles(ref, alts, lineNo);
+
+        // find out our location
+        final int start = Integer.valueOf(locParts[1]);
+        int stop = start;
+
+        // ref alleles don't need to be single bases for monomorphic sites
+        if ( alleles.size() == 1 ) {
+            stop = start + alleles.get(0).length() - 1;
+        } else if ( !isSingleNucleotideEvent(alleles) ) {
+            stop = clipAlleles(start, ref, alleles, null, lineNo);
+        }
+
+        return new VCFLocFeature(locParts[0], start, stop);
     }
+
+    private final static class VCFLocFeature implements Feature {
+
+        final String chr;
+        final int start, stop;
+
+        private VCFLocFeature(String chr, int start, int stop) {
+            this.chr = chr;
+            this.start = start;
+            this.stop = stop;
+        }
+
+        public String getChr() { return chr; }
+        public int getStart() { return start; }
+        public int getEnd() { return stop; }
+    }
+
 
     /**
      * decode the line into a feature (VariantContext)
@@ -155,36 +218,32 @@ public abstract class AbstractVCFCodec implements FeatureCodec, NameAwareCodec, 
      * @return a VariantContext
      */
     public Feature decode(String line) {
-        return reallyDecode(line);
-    }
+        // the same line reader is not used for parsing the header and parsing lines, if we see a #, we've seen a header line
+        if (line.startsWith(VCFHeader.HEADER_INDICATOR)) return null;
 
-    private Feature reallyDecode(String line) {
-        try {
-            // the same line reader is not used for parsing the header and parsing lines, if we see a #, we've seen a header line
-            if (line.startsWith(VCFHeader.HEADER_INDICATOR)) return null;
+        // our header cannot be null, we need the genotype sample names and counts
+        if (header == null) throw new ReviewedStingException("VCF Header cannot be null when decoding a record");
 
-            // our header cannot be null, we need the genotype sample names and counts
-            if (header == null) throw new IllegalStateException("VCF Header cannot be null when decoding a record");
+        if (parts == null)
+            parts = new String[Math.min(header.getColumnCount(), NUM_STANDARD_FIELDS+1)];
 
-            if (parts == null)
-                parts = new String[Math.min(header.getColumnCount(), NUM_STANDARD_FIELDS+1)];
+        int nParts = ParsingUtils.split(line, parts, VCFConstants.FIELD_SEPARATOR_CHAR, true);
 
-            int nParts = ParsingUtils.split(line, parts, VCFConstants.FIELD_SEPARATOR_CHAR, true);
+        // if we have don't have a header, or we have a header with no genotyping data check that we have eight columns.  Otherwise check that we have nine (normal colummns + genotyping data)
+        if (( (header == null || !header.hasGenotypingData()) && nParts != NUM_STANDARD_FIELDS) ||
+             (header != null && header.hasGenotypingData() && nParts != (NUM_STANDARD_FIELDS + 1)) )
+            throw new UserException.MalformedVCF("there aren't enough columns for line " + line + " (we expected " + (header == null ? NUM_STANDARD_FIELDS : NUM_STANDARD_FIELDS + 1) +
+                    " tokens, and saw " + nParts + " )", lineNo);
 
-            // if we have don't have a header, or we have a header with no genotyping data check that we have eight columns.  Otherwise check that we have nine (normal colummns + genotyping data)
-            if (( (header == null || (header != null && !header.hasGenotypingData())) && nParts != NUM_STANDARD_FIELDS) ||
-                 (header != null && header.hasGenotypingData() && nParts != (NUM_STANDARD_FIELDS + 1)) )
-                throw new IllegalArgumentException("There aren't enough columns for line " + line + " (we expected " + (header == null ? NUM_STANDARD_FIELDS : NUM_STANDARD_FIELDS + 1) +
-                        " tokens, and saw " + nParts + " )");
-
-            return parseVCFLine(parts);
-        } catch (TribbleException e) {
-            throw new TribbleException.InvalidDecodeLine(e.getMessage(), line);
-        }
+        return parseVCFLine(parts);
     }
 
     protected void generateException(String message) {
-        throw new TribbleException.InvalidDecodeLine(message, lineNo);
+        throw new UserException.MalformedVCF(message, lineNo);
+    }
+
+    protected static void generateException(String message, int lineNo) {
+        throw new UserException.MalformedVCF(message, lineNo);
     }
 
     /**
@@ -199,7 +258,7 @@ public abstract class AbstractVCFCodec implements FeatureCodec, NameAwareCodec, 
 
         // parse out the required fields
         String contig = getCachedString(parts[0]);
-        long pos = Long.valueOf(parts[1]);
+        int pos = Integer.valueOf(parts[1]);
         String id = null;
         if ( parts[2].length() == 0 )
             generateException("The VCF specification requires a valid ID field");
@@ -219,13 +278,13 @@ public abstract class AbstractVCFCodec implements FeatureCodec, NameAwareCodec, 
         Map<String, Object> attributes = parseInfo(info, id);
 
         // find out our current location, and clip the alleles down to their minimum length
-        long loc = pos;
+        int loc = pos;
         // ref alleles don't need to be single bases for monomorphic sites
         if ( alleles.size() == 1 ) {
             loc = pos + alleles.get(0).length() - 1;
         } else if ( !isSingleNucleotideEvent(alleles) ) {
             ArrayList<Allele> newAlleles = new ArrayList<Allele>();
-            loc = clipAlleles(pos, ref, alleles, newAlleles);
+            loc = clipAlleles(pos, ref, alleles, newAlleles, lineNo);
             alleles = newAlleles;
         }
 
@@ -237,7 +296,7 @@ public abstract class AbstractVCFCodec implements FeatureCodec, NameAwareCodec, 
 
         VariantContext vc = null;
         try {
-            vc =  new VariantContext(name, contig, pos, loc, alleles, qual, filters, attributes);
+            vc =  new VariantContext(name, contig, pos, loc, alleles, qual, filters, attributes, ref.getBytes()[0]);
         } catch (Exception e) {
             generateException(e.getMessage());
         }
@@ -246,15 +305,14 @@ public abstract class AbstractVCFCodec implements FeatureCodec, NameAwareCodec, 
         if ( !header.samplesWereAlreadySorted() )
             vc.getGenotypes();
 
-        // Trim bases of all alleles if necessary
-        return createVariantContextWithTrimmedAlleles(vc);
+        return vc;
     }
 
     /**
      *
      * @return the type of record
      */
-    public Class getFeatureType() {
+    public Class<VariantContext> getFeatureType() {
         return VariantContext.class;
     }
 
@@ -302,23 +360,31 @@ public abstract class AbstractVCFCodec implements FeatureCodec, NameAwareCodec, 
             generateException("The VCF specification requires a valid info field");
 
         if ( !infoField.equals(VCFConstants.EMPTY_INFO_FIELD) ) {
-            int infoValueSplitSize = ParsingUtils.split(infoField, infoValueArray, VCFConstants.INFO_FIELD_SEPARATOR_CHAR);
-            for (int i = 0; i < infoValueSplitSize; i++) {
+            if ( infoField.indexOf("\t") != -1 || infoField.indexOf(" ") != -1 )
+                generateException("The VCF specification does not allow for whitespace in the INFO field");
+
+            int infoFieldSplitSize = ParsingUtils.split(infoField, infoFieldArray, VCFConstants.INFO_FIELD_SEPARATOR_CHAR, false);
+            for (int i = 0; i < infoFieldSplitSize; i++) {
                 String key;
                 Object value;
 
-                int eqI = infoValueArray[i].indexOf("=");
+                int eqI = infoFieldArray[i].indexOf("=");
                 if ( eqI != -1 ) {
-                    key = infoValueArray[i].substring(0, eqI);
-                    String str = infoValueArray[i].substring(eqI+1, infoValueArray[i].length());
+                    key = infoFieldArray[i].substring(0, eqI);
+                    String str = infoFieldArray[i].substring(eqI+1);
 
-                    // lets see if the string contains a , separator
-                    if ( str.contains(",") )
-                        value = Arrays.asList(str.split(","));
-                    else
-                        value = str;
+                    // split on the INFO field separator
+                    int infoValueSplitSize = ParsingUtils.split(str, infoValueArray, VCFConstants.INFO_FIELD_ARRAY_SEPARATOR_CHAR, false);
+                    if ( infoValueSplitSize == 1 ) {
+                        value = infoValueArray[0];
+                    } else {
+                        ArrayList<String> valueList = new ArrayList<String>(infoValueSplitSize);
+                        for ( int j = 0; j < infoValueSplitSize; j++ )
+                            valueList.add(infoValueArray[j]);
+                        value = valueList;
+                    }
                 } else {
-                    key = infoValueArray[i];
+                    key = infoFieldArray[i];
                     value = true;
                 }
 
@@ -326,7 +392,8 @@ public abstract class AbstractVCFCodec implements FeatureCodec, NameAwareCodec, 
             }
         }
 
-        attributes.put(VariantContext.ID_KEY, id);
+        if ( ! id.equals(VCFConstants.EMPTY_ID_FIELD) )
+            attributes.put(VariantContext.ID_KEY, id);
         return attributes;
     }
 
@@ -472,29 +539,44 @@ public abstract class AbstractVCFCodec implements FeatureCodec, NameAwareCodec, 
         return true;
     }
 
-    private static void generateException(String message, int lineNo) {
-        throw new TribbleException.InvalidDecodeLine(message, lineNo);
-    }
-
-    private static int computeForwardClipping(List<Allele> unclippedAlleles, String ref) {
+    public static int computeForwardClipping(List<Allele> unclippedAlleles, String ref) {
         boolean clipping = true;
-        // Note that the computation of forward clipping here is meant only to see whether there is a common
-        // base to all alleles, and to correctly compute reverse clipping,
-        // but it is not used for actually changing alleles - this is done in function
-        // createVariantContextWithTrimmedAlleles() below.
 
-        for (Allele a : unclippedAlleles) {
-            if (a.isSymbolic()) {
+        for ( Allele a : unclippedAlleles ) {
+            if ( a.isSymbolic() )
                 continue;
-            }
-            if (a.length() < 1 || (a.getBases()[0] != ref.getBytes()[0])) {
+
+            if ( a.length() < 1 || (a.getBases()[0] != ref.getBytes()[0]) ) {
                 clipping = false;
+                break;
             }
         }
-        return (clipping) ? 1 : 0;
 
+        return (clipping) ? 1 : 0;
     }
 
+    protected static int computeReverseClipping(List<Allele> unclippedAlleles, String ref, int forwardClipping, int lineNo) {
+        int clipping = 0;
+        boolean stillClipping = true;
+
+        while ( stillClipping ) {
+            for ( Allele a : unclippedAlleles ) {
+                if ( a.isSymbolic() )
+                    continue;
+
+                if ( a.length() - clipping <= forwardClipping || a.length() - forwardClipping == 0 )
+                    stillClipping = false;
+                else if ( ref.length() == clipping )
+                    generateException("bad alleles encountered", lineNo);
+                else if ( a.getBases()[a.length()-clipping-1] != ref.getBytes()[ref.length()-clipping-1] )
+                    stillClipping = false;
+            }
+            if ( stillClipping )
+                clipping++;
+        }
+
+        return clipping;
+    }
     /**
      * clip the alleles, based on the reference
      *
@@ -502,116 +584,56 @@ public abstract class AbstractVCFCodec implements FeatureCodec, NameAwareCodec, 
      * @param ref the reference string
      * @param unclippedAlleles the list of unclipped alleles
      * @param clippedAlleles output list of clipped alleles
-     * @return a list of alleles, clipped to the reference
+     * @param lineNo the current line number in the file
+     * @return the new reference end position of this event
      */
-    protected static long clipAlleles(long position, String ref, List<Allele> unclippedAlleles, List<Allele> clippedAlleles) {
-
-        // Note that the computation of forward clipping here is meant only to see whether there is a common
-        // base to all alleles, and to correctly compute reverse clipping,
-        // but it is not used for actually changing alleles - this is done in function
-        // createVariantContextWithTrimmedAlleles() below.
+    protected static int clipAlleles(int position, String ref, List<Allele> unclippedAlleles, List<Allele> clippedAlleles, int lineNo) {
 
         int forwardClipping = computeForwardClipping(unclippedAlleles, ref);
+        int reverseClipping = computeReverseClipping(unclippedAlleles, ref, forwardClipping, lineNo);
 
-        int reverseClipped = 0;
-        boolean clipping = true;
-        while (clipping) {
-            for (Allele a : unclippedAlleles) {
-                if (a.isSymbolic()) {
-                    continue;
+        if ( clippedAlleles != null ) {
+            for ( Allele a : unclippedAlleles ) {
+                if ( a.isSymbolic() ) {
+                    clippedAlleles.add(a);
+                } else {
+                    clippedAlleles.add(Allele.create(Arrays.copyOfRange(a.getBases(), forwardClipping, a.getBases().length-reverseClipping), a.isReference()));
                 }
-                if (a.length() - reverseClipped <= forwardClipping || a.length() - forwardClipping == 0)
-                    clipping = false;
-                else if (a.getBases()[a.length()-reverseClipped-1] != ref.getBytes()[ref.length()-reverseClipped-1])
-                    clipping = false;
-            }
-            if (clipping) reverseClipped++;
-        }
-
-        for (Allele a : unclippedAlleles) {
-            if (a.isSymbolic()) {
-                clippedAlleles.add(a);
-            } else {
-                clippedAlleles.add(Allele.create(Arrays.copyOfRange(a.getBases(),0,a.getBases().length-reverseClipped),a.isReference()));
             }
         }
 
         // the new reference length
-        int refLength = ref.length() - reverseClipped;
+        int refLength = ref.length() - reverseClipping;
 
         return position+Math.max(refLength - 1,0);
     }
 
-    public static VariantContext createVariantContextWithTrimmedAlleles(VariantContext inputVC) {
-        // see if we need to trim common reference base from all alleles
-        boolean trimVC;
-
-        // We need to trim common reference base from all alleles in all genotypes if a ref base is common to all alleles
-        Allele refAllele = inputVC.getReference();
-        if (!inputVC.isVariant())
-            trimVC = false;
-        else if (refAllele.isNull())
-            trimVC = false;
-        else {
-            trimVC = (computeForwardClipping(new ArrayList<Allele>(inputVC.getAlternateAlleles()),
-                    inputVC.getReference().getDisplayString()) > 0);
-         }
-
-        // nothing to do if we don't need to trim bases
-        if (trimVC) {
-            List<Allele> alleles = new ArrayList<Allele>();
-            Map<String, Genotype> genotypes = new TreeMap<String, Genotype>();
-
-            // set the reference base for indels in the attributes
-            Map<String,Object> attributes = new TreeMap<String,Object>(inputVC.getAttributes());
-            attributes.put(VariantContext.REFERENCE_BASE_FOR_INDEL_KEY, new Byte(inputVC.getReference().getBases()[0]));
-
-            Map<Allele, Allele> originalToTrimmedAlleleMap = new HashMap<Allele, Allele>();
-
-            for (Allele a : inputVC.getAlleles()) {
-                if (a.isSymbolic()) {
-                    alleles.add(a);
-                    originalToTrimmedAlleleMap.put(a, a);
-                } else {
-                    // get bases for current allele and create a new one with trimmed bases
-                    byte[] newBases = Arrays.copyOfRange(a.getBases(), 1, a.length());
-                    Allele trimmedAllele = Allele.create(newBases, a.isReference());
-                    alleles.add(trimmedAllele);
-                    originalToTrimmedAlleleMap.put(a, trimmedAllele);
-                }
-            }
-
-            // detect case where we're trimming bases but resulting vc doesn't have any null allele. In that case, we keep original representation
-            // example: mixed records such as {TA*,TGA,TG}
-            boolean hasNullAlleles = false;
-
-            for (Allele a: originalToTrimmedAlleleMap.values()) {
-                if (a.isNull())
-                    hasNullAlleles = true;
-                if (a.isReference())
-                    refAllele = a;
-             }
-
-             if (!hasNullAlleles)
-               return inputVC;
-           // now we can recreate new genotypes with trimmed alleles
-            for ( Map.Entry<String, Genotype> sample : inputVC.getGenotypes().entrySet() ) {
-
-                List<Allele> originalAlleles = sample.getValue().getAlleles();
-                List<Allele> trimmedAlleles = new ArrayList<Allele>();
-                for ( Allele a : originalAlleles ) {
-                    if ( a.isCalled() )
-                        trimmedAlleles.add(originalToTrimmedAlleleMap.get(a));
-                    else
-                        trimmedAlleles.add(Allele.NO_CALL);
-                }
-                genotypes.put(sample.getKey(), Genotype.modifyAlleles(sample.getValue(), trimmedAlleles));
-
-            }
-            return new VariantContext(inputVC.getSource(), inputVC.getChr(), inputVC.getStart(), inputVC.getEnd(), alleles, genotypes, inputVC.getNegLog10PError(), inputVC.filtersWereApplied() ? inputVC.getFilters() : null, attributes);
-
+    public final static boolean canDecodeFile(final File potentialInput, final String MAGIC_HEADER_LINE) {
+        try {
+            return isVCFStream(new FileInputStream(potentialInput), MAGIC_HEADER_LINE) ||
+                    isVCFStream(new GZIPInputStream(new FileInputStream(potentialInput)), MAGIC_HEADER_LINE) ||
+                    isVCFStream(new BlockCompressedInputStream(new FileInputStream(potentialInput)), MAGIC_HEADER_LINE);
+        } catch ( FileNotFoundException e ) {
+            return false;
+        } catch ( IOException e ) {
+            return false;
         }
+    }
 
-        return inputVC;
+    private final static boolean isVCFStream(final InputStream stream, final String MAGIC_HEADER_LINE) {
+        try {
+            byte[] buff = new byte[MAGIC_HEADER_LINE.length()];
+            int nread = stream.read(buff, 0, MAGIC_HEADER_LINE.length());
+            boolean eq = Arrays.equals(buff, MAGIC_HEADER_LINE.getBytes());
+            return eq;
+//            String firstLine = new String(buff);
+//            return firstLine.startsWith(MAGIC_HEADER_LINE);
+        } catch ( IOException e ) {
+            return false;
+        } catch ( RuntimeException e ) {
+            return false;
+        } finally {
+            try { stream.close(); } catch ( IOException e ) {}
+        }
     }
 }

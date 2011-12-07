@@ -25,10 +25,10 @@
 
 package org.broadinstitute.sting.utils.codecs.vcf;
 
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
+import org.apache.log4j.Logger;
 import org.broadinstitute.sting.gatk.GenomeAnalysisEngine;
 import org.broadinstitute.sting.gatk.datasources.rmd.ReferenceOrderedDataSource;
-import org.apache.log4j.Logger;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
 import java.util.*;
 
@@ -116,10 +116,26 @@ public class VCFUtils {
         return fields;
     }
 
+    /** Only displays a warning if a logger is provided and an identical warning hasn't been already issued */
+    private static final class HeaderConflictWarner {
+        Logger logger;
+        Set<String> alreadyIssued = new HashSet<String>();
 
+        private HeaderConflictWarner(final Logger logger) {
+            this.logger = logger;
+        }
+
+        public void warn(final VCFHeaderLine line, final String msg) {
+            if ( logger != null && ! alreadyIssued.contains(line.getKey()) ) {
+                alreadyIssued.add(line.getKey());
+                logger.warn(msg);
+            }
+        }
+    }
 
     public static Set<VCFHeaderLine> smartMergeHeaders(Collection<VCFHeader> headers, Logger logger) throws IllegalStateException {
         HashMap<String, VCFHeaderLine> map = new HashMap<String, VCFHeaderLine>(); // from KEY.NAME -> line
+        HeaderConflictWarner conflictWarner = new HeaderConflictWarner(logger);
 
         // todo -- needs to remove all version headers from sources and add its own VCF version line
         for ( VCFHeader source : headers ) {
@@ -153,24 +169,24 @@ public class VCFUtils {
                                 // number, then this value should be 1. However, if the INFO field describes a pair
                                 // of numbers, then this value should be 2 and so on. If the number of possible
                                 // values varies, is unknown, or is unbounded, then this value should be '.'.
-                                if ( logger != null ) logger.warn("Promoting header field Number to . due to number differences in header lines: " + line + " " + other);
+                                conflictWarner.warn(line, "Promoting header field Number to . due to number differences in header lines: " + line + " " + other);
                                 compOther.setNumberToUnbounded();
                             } else if ( compLine.getType() == VCFHeaderLineType.Integer && compOther.getType() == VCFHeaderLineType.Float ) {
                                 // promote key to Float
-                                if ( logger != null ) logger.warn("Promoting Integer to Float in header: " + compOther);
+                                conflictWarner.warn(line, "Promoting Integer to Float in header: " + compOther);
                                 map.put(key, compOther);
                             } else if ( compLine.getType() == VCFHeaderLineType.Float && compOther.getType() == VCFHeaderLineType.Integer ) {
                                 // promote key to Float
-                                if ( logger != null ) logger.warn("Promoting Integer to Float in header: " + compOther);
+                                conflictWarner.warn(line, "Promoting Integer to Float in header: " + compOther);
                             } else {
                                 throw new IllegalStateException("Incompatible header types, collision between these two types: " + line + " " + other );
                             }
                         }
                         if ( ! compLine.getDescription().equals(compOther.getDescription()) )
-                            if ( logger != null ) logger.warn("Allowing unequal description fields through: keeping " + compOther + " excluding " + compLine);
+                            conflictWarner.warn(line, "Allowing unequal description fields through: keeping " + compOther + " excluding " + compLine);
                     } else {
                         // we are not equal, but we're not anything special either
-                        if ( logger != null ) logger.warn("Ignoring header line already in map: this header line = " + line + " already present header = " + other);
+                        conflictWarner.warn(line, "Ignoring header line already in map: this header line = " + line + " already present header = " + other);
                     }
                 } else {
                     map.put(key, line);
@@ -340,18 +356,19 @@ public class VCFUtils {
         return headers;
     }
 
-    /**
-     * return a set of supported format lines; what we currently support for output in the genotype fields of a VCF
-     * @return a set of VCF format lines
-     */
-    public static Set<VCFFormatHeaderLine> getSupportedHeaderStrings() {
-        Set<VCFFormatHeaderLine> result = new HashSet<VCFFormatHeaderLine>();
-        result.add(new VCFFormatHeaderLine(VCFConstants.GENOTYPE_KEY, 1, VCFHeaderLineType.String, "Genotype"));
-        result.add(new VCFFormatHeaderLine(VCFConstants.GENOTYPE_QUALITY_KEY, 1, VCFHeaderLineType.Float, "Genotype Quality"));
-        result.add(new VCFFormatHeaderLine(VCFConstants.DEPTH_KEY, 1, VCFHeaderLineType.Integer, "Read Depth (only filtered reads used for calling)"));
-        result.add(new VCFFormatHeaderLine(VCFConstants.PHRED_GENOTYPE_LIKELIHOODS_KEY, 3, VCFHeaderLineType.Float, "Normalized, Phred-scaled likelihoods for AA,AB,BB genotypes where A=ref and B=alt; not applicable if site is not biallelic"));
 
-        return result;
+    public static String rsIDOfFirstRealVariant(List<VariantContext> VCs, VariantContext.Type type) {
+        if ( VCs == null )
+            return null;
+
+        String rsID = null;
+        for ( VariantContext vc : VCs ) {
+            if ( vc.getType() == type ) {
+                rsID = vc.getID();
+                break;
+            }
+        }
+
+        return rsID;
     }
-    
 }

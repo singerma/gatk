@@ -38,12 +38,13 @@ public class VCFWriterUnitTest extends BaseTest {
     private Set<String> additionalColumns = new HashSet<String>();
     private File fakeVCFFile = new File("FAKEVCFFILEFORTESTING.vcf");
     private GenomeLocParser genomeLocParser;
+    private IndexedFastaSequenceFile seq;
 
     @BeforeClass
     public void beforeTests() {
         File referenceFile = new File(hg18Reference);
         try {
-            IndexedFastaSequenceFile seq = new CachingIndexedFastaSequenceFile(referenceFile);
+            seq = new CachingIndexedFastaSequenceFile(referenceFile);
             genomeLocParser = new GenomeLocParser(seq);
         }
         catch(FileNotFoundException ex) {
@@ -55,10 +56,10 @@ public class VCFWriterUnitTest extends BaseTest {
     @Test
     public void testBasicWriteAndRead() {
         VCFHeader header = createFakeHeader(metaData,additionalColumns);
-        VCFWriter writer = new StandardVCFWriter(fakeVCFFile);
+        VCFWriter writer = new StandardVCFWriter(fakeVCFFile, seq.getSequenceDictionary());
         writer.writeHeader(header);
-        writer.add(createVC(header),"A".getBytes()[0]);
-        writer.add(createVC(header),"A".getBytes()[0]);
+        writer.add(createVC(header));
+        writer.add(createVC(header));
         writer.close();
         VCFCodec reader = new VCFCodec();
         AsciiLineReader lineReader;
@@ -104,7 +105,6 @@ public class VCFWriterUnitTest extends BaseTest {
     public static VCFHeader createFakeHeader(Set<VCFHeaderLine> metaData, Set<String> additionalColumns) {
         metaData.add(new VCFHeaderLine(VCFHeaderVersion.VCF4_0.getFormatString(), VCFHeaderVersion.VCF4_0.getVersionString()));
         metaData.add(new VCFHeaderLine("two", "2"));
-        additionalColumns.add("FORMAT");
         additionalColumns.add("extra1");
         additionalColumns.add("extra2");
         return new VCFHeader(metaData, additionalColumns);
@@ -135,7 +135,7 @@ public class VCFWriterUnitTest extends BaseTest {
             genotypes.put(name,gt);
             
         }
-        return new VariantContext("RANDOM",loc.getContig(), loc.getStart(), loc.getStop(), alleles, genotypes, 0, filters, attributes);
+        return new VariantContext("RANDOM",loc.getContig(), loc.getStart(), loc.getStop(), alleles, genotypes, 0, filters, attributes, (byte)'A');
 
 
     }
@@ -158,6 +158,6 @@ public class VCFWriterUnitTest extends BaseTest {
             Assert.assertTrue(additionalColumns.contains(key));
             index++;
         }
-        Assert.assertEquals(index+1, additionalColumns.size()  /* for the header field we don't see */);
+        Assert.assertEquals(index, additionalColumns.size());
     }
 }

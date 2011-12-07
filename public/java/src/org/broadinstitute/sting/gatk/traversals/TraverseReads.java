@@ -2,15 +2,18 @@ package org.broadinstitute.sting.gatk.traversals;
 
 import net.sf.samtools.SAMRecord;
 import org.apache.log4j.Logger;
-import org.broadinstitute.sting.gatk.WalkerManager;
 import org.broadinstitute.sting.gatk.ReadMetrics;
+import org.broadinstitute.sting.gatk.WalkerManager;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
-import org.broadinstitute.sting.gatk.datasources.providers.*;
+import org.broadinstitute.sting.gatk.datasources.providers.ReadBasedReferenceOrderedView;
+import org.broadinstitute.sting.gatk.datasources.providers.ReadReferenceView;
+import org.broadinstitute.sting.gatk.datasources.providers.ReadShardDataProvider;
+import org.broadinstitute.sting.gatk.datasources.providers.ReadView;
 import org.broadinstitute.sting.gatk.refdata.ReadMetaDataTracker;
 import org.broadinstitute.sting.gatk.walkers.DataSource;
 import org.broadinstitute.sting.gatk.walkers.ReadWalker;
-import org.broadinstitute.sting.utils.GenomeLocParser;
 import org.broadinstitute.sting.utils.GenomeLoc;
+import org.broadinstitute.sting.utils.sam.GATKSAMRecord;
 
 /*
  * Copyright (c) 2009 The Broad Institute
@@ -80,8 +83,10 @@ public class TraverseReads<M,T> extends TraversalEngine<M,T,ReadWalker<M,T>,Read
         // get the reference ordered data
         ReadBasedReferenceOrderedView rodView = new ReadBasedReferenceOrderedView(dataProvider);
 
+        boolean done = walker.isDone();
         // while we still have more reads
         for (SAMRecord read : reads) {
+            if ( done ) break;
             // ReferenceContext -- the reference bases covered by the read
             ReferenceContext refContext = null;
 
@@ -96,14 +101,15 @@ public class TraverseReads<M,T> extends TraversalEngine<M,T,ReadWalker<M,T>,Read
             // if the read is mapped, create a metadata tracker
             ReadMetaDataTracker tracker = (read.getReferenceIndex() >= 0) ? rodView.getReferenceOrderedDataForRead(read) : null;
 
-            final boolean keepMeP = walker.filter(refContext, read);
+            final boolean keepMeP = walker.filter(refContext, (GATKSAMRecord) read);
             if (keepMeP) {
-                M x = walker.map(refContext, read, tracker); // the tracker can be null
+                M x = walker.map(refContext, (GATKSAMRecord) read, tracker); // the tracker can be null
                 sum = walker.reduce(x, sum);
             }
 
             GenomeLoc locus = read.getReferenceIndex() == SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX ? null : engine.getGenomeLocParser().createGenomeLoc(read.getReferenceName(),read.getAlignmentStart());
             printProgress(dataProvider.getShard(),locus);
+            done = walker.isDone();
         }
         return sum;
     }

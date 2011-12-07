@@ -38,6 +38,9 @@ import org.apache.commons.lang.StringUtils
 import org.broadinstitute.sting.queue.util._
 import collection.immutable.{TreeSet, TreeMap}
 import org.broadinstitute.sting.queue.function.scattergather.{ScatterFunction, CloneFunction, GatherFunction, ScatterGatherableFunction}
+import java.util.Date
+import org.broadinstitute.sting.utils.Utils
+import org.broadinstitute.sting.utils.io.IOUtils
 
 /**
  * The internal dependency tracker between sets of function input and output files.
@@ -138,30 +141,32 @@ class QGraph extends Logging {
     validate()
 
     if (running && numMissingValues == 0) {
-      logger.info("Generating scatter gather jobs.")
       val scatterGathers = jobGraph.edgeSet.filter(edge => scatterGatherable(edge))
+      if (!scatterGathers.isEmpty) {
+        logger.info("Generating scatter gather jobs.")
 
-      var addedFunctions = List.empty[QFunction]
-      for (scatterGather <- scatterGathers) {
-        val functions = scatterGather.asInstanceOf[FunctionEdge]
-                .function.asInstanceOf[ScatterGatherableFunction]
-                .generateFunctions()
-        addedFunctions ++= functions
+        var addedFunctions = List.empty[QFunction]
+        for (scatterGather <- scatterGathers) {
+          val functions = scatterGather.asInstanceOf[FunctionEdge]
+                  .function.asInstanceOf[ScatterGatherableFunction]
+                  .generateFunctions()
+          addedFunctions ++= functions
+        }
+
+        logger.info("Removing original jobs.")
+        this.jobGraph.removeAllEdges(scatterGathers)
+        prune()
+
+        logger.info("Adding scatter gather jobs.")
+        addedFunctions.foreach(function => if (running) this.add(function))
+
+        logger.info("Regenerating graph.")
+        fill
+        val scatterGatherDotFile = if (settings.expandedDotFile != null) settings.expandedDotFile else settings.dotFile
+        if (scatterGatherDotFile != null)
+          renderToDot(scatterGatherDotFile)
+        validate()
       }
-
-      logger.info("Removing original jobs.")
-      this.jobGraph.removeAllEdges(scatterGathers)
-      prune()
-
-      logger.info("Adding scatter gather jobs.")
-      addedFunctions.foreach(function => if (running) this.add(function))
-
-      logger.info("Regenerating graph.")
-      fill
-      val scatterGatherDotFile = if (settings.expandedDotFile != null) settings.expandedDotFile else settings.dotFile
-      if (scatterGatherDotFile != null)
-        renderToDot(scatterGatherDotFile)
-      validate()
     }
   }
 
@@ -317,7 +322,10 @@ class QGraph extends Logging {
       logger.debug("+++++++")
       foreachFunction(readyJobs.toList, edge => {
         if (running) {
+          edge.myRunInfo.startTime = new Date()
+          edge.getRunInfo.exechosts = Utils.resolveHostname()
           logEdge(edge)
+          edge.myRunInfo.doneTime = new Date()
           edge.markAsDone
         }
       })
@@ -358,6 +366,13 @@ class QGraph extends Logging {
       else if (settings.jobRunner == null)
         settings.jobRunner = "Shell"
       commandLineManager = commandLinePluginManager.createByName(settings.jobRunner)
+
+      for (mgr <- managers) {
+        if (mgr != null) {
+          val manager = mgr.asInstanceOf[JobManager[QFunction,JobRunner[QFunction]]]
+          manager.init()
+        }
+      }
 
       if (settings.startFromScratch)
         logger.info("Removing outputs from previous runs.")
@@ -402,8 +417,15 @@ class QGraph extends Logging {
           startedJobsToEmail = Set.empty[FunctionEdge]
         }
 
-        if (readyJobs.size == 0 && runningJobs.size > 0)
-          Thread.sleep(nextRunningCheck(lastRunningCheck))
+        if (readyJobs.size == 0 && runningJobs.size > 0) {
+          runningLock.synchronized {
+            if (running) {
+              val timeout = nextRunningCheck(lastRunningCheck)
+              if (timeout > 0)
+                runningLock.wait(timeout)
+            }
+          }
+        }
 
         lastRunningCheck = System.currentTimeMillis
         updateStatus()
@@ -452,7 +474,7 @@ class QGraph extends Logging {
     lastRunningCheck > 0 && nextRunningCheck(lastRunningCheck) <= 0
 
   private def nextRunningCheck(lastRunningCheck: Long) =
-    0L max ((30 * 1000L) - (System.currentTimeMillis - lastRunningCheck))
+    ((30 * 1000L) - (System.currentTimeMillis - lastRunningCheck))
 
   private def logStatusCounts {
     logger.info("%d Pend, %d Run, %d Fail, %d Done".format(
@@ -931,6 +953,14 @@ class QGraph extends Logging {
   }
 
   /**
+   * Utility function for running a method over all function edges.
+   * @param edgeFunction Function to run for each FunctionEdge.
+   */
+  private def getFunctionEdges: List[FunctionEdge] = {
+    jobGraph.edgeSet.toList.filter(_.isInstanceOf[FunctionEdge]).asInstanceOf[List[FunctionEdge]]
+  }
+
+  /**
    * Utility function for running a method over all functions, but traversing the nodes in order of dependency.
    * @param edgeFunction Function to run for each FunctionEdge.
    */
@@ -980,7 +1010,12 @@ class QGraph extends Logging {
       true
     } else {
       !this.jobGraph.edgeSet.exists(edge => {
-        edge.isInstanceOf[FunctionEdge] && edge.asInstanceOf[FunctionEdge].status == RunnerStatus.FAILED
+        if (edge.isInstanceOf[FunctionEdge]) {
+          val status = edge.asInstanceOf[FunctionEdge].status
+          (status == RunnerStatus.PENDING || status == RunnerStatus.RUNNING || status == RunnerStatus.FAILED)
+        } else {
+          false
+        }
       })
     }
   }
@@ -1003,7 +1038,10 @@ class QGraph extends Logging {
           .asInstanceOf[Set[JobRunner[QFunction]]]
         if (managerRunners.size > 0)
           try {
-            manager.updateStatus(managerRunners)
+            val updatedRunners = manager.updateStatus(managerRunners)
+            for (runner <- managerRunners.diff(updatedRunners)) {
+              runner.checkUnknownStatus()
+            }
           } catch {
             case e => /* ignore */
           }
@@ -1016,31 +1054,49 @@ class QGraph extends Logging {
    */
   def isShutdown = !running
 
+  def getFunctionsAndStatus(functions: List[QFunction]): Map[QFunction, JobRunInfo] = {
+    getFunctionEdges.map(edge => (edge.function, edge.getRunInfo)).toMap
+  }
+
   /**
    * Kills any forked jobs still running.
    */
   def shutdown() {
     // Signal the main thread to shutdown.
     running = false
-    // Wait for the thread to finish and exit normally.
+
+    // Try and wait for the thread to finish and exit normally.
+    runningLock.synchronized {
+      runningLock.notify()
+    }
+
+    // Start killing jobs.
     runningLock.synchronized {
       val runners = runningJobs.map(_.runner)
       runningJobs = Set.empty[FunctionEdge]
       for (mgr <- managers) {
         if (mgr != null) {
           val manager = mgr.asInstanceOf[JobManager[QFunction,JobRunner[QFunction]]]
-          val managerRunners = runners
-            .filter(runner => manager.runnerType.isAssignableFrom(runner.getClass))
-            .asInstanceOf[Set[JobRunner[QFunction]]]
-          if (managerRunners.size > 0)
-            try {
-              manager.tryStop(managerRunners)
-            } catch {
-              case e => /* ignore */
+          try {
+            val managerRunners = runners
+              .filter(runner => manager.runnerType.isAssignableFrom(runner.getClass))
+              .asInstanceOf[Set[JobRunner[QFunction]]]
+            if (managerRunners.size > 0)
+              try {
+                manager.tryStop(managerRunners)
+              } catch {
+                case e => /* ignore */
+              }
+            for (runner <- managerRunners) {
+              try {
+                runner.cleanup()
+              } catch {
+                case e => /* ignore */
+              }
             }
-          for (runner <- managerRunners) {
+          } finally {
             try {
-              runner.cleanup()
+              manager.exit()
             } catch {
               case e => /* ignore */
             }

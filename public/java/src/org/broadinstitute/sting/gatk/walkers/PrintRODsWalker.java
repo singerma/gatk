@@ -25,14 +25,14 @@
 
 package org.broadinstitute.sting.gatk.walkers;
 
+import org.broad.tribble.Feature;
+import org.broadinstitute.sting.commandline.Input;
+import org.broadinstitute.sting.commandline.Output;
+import org.broadinstitute.sting.commandline.RodBinding;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
 import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
-import org.broadinstitute.sting.gatk.refdata.VariantContextAdaptors;
-import org.broadinstitute.sting.gatk.refdata.utils.GATKFeature;
-import org.broadinstitute.sting.commandline.Output;
 
-import java.util.Iterator;
 import java.io.PrintStream;
 
 /**
@@ -40,6 +40,9 @@ import java.io.PrintStream;
  * of the given ROD.
  */
 public class PrintRODsWalker extends RodWalker<Integer, Integer> {
+    @Input(fullName="input", shortName = "input", doc="The input ROD which should be printed out.", required=true)
+    public RodBinding<Feature> input;
+
     @Output
     PrintStream out;
 
@@ -61,11 +64,8 @@ public class PrintRODsWalker extends RodWalker<Integer, Integer> {
         if ( tracker == null )
             return 0;
 
-        Iterator<GATKFeature> rods = tracker.getAllRods().iterator();
-        while ( rods.hasNext() ) {
-            Object rod = rods.next().getUnderlyingObject();
-            if (VariantContextAdaptors.canBeConvertedToVariantContext(rod) )
-                out.println(rod.toString());
+        for ( Feature feature : tracker.getValues(Feature.class, context.getLocation()) ) {
+            out.println(feature.toString());
         }
 
         return 1;

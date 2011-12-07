@@ -1,16 +1,20 @@
 package org.broadinstitute.sting.gatk.executive;
 
-import org.broadinstitute.sting.gatk.datasources.reads.Shard;
-import org.broadinstitute.sting.gatk.datasources.sample.SampleDataSource;
-import org.broadinstitute.sting.utils.GenomeLoc;
-import org.broadinstitute.sting.gatk.iterators.*;
+import net.sf.picard.util.PeekableIterator;
 import org.broadinstitute.sting.gatk.ReadProperties;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
-
-import java.util.*;
-
-import net.sf.picard.util.PeekableIterator;
+import org.broadinstitute.sting.gatk.datasources.reads.Shard;
+import org.broadinstitute.sting.gatk.iterators.LocusIterator;
+import org.broadinstitute.sting.gatk.iterators.LocusIteratorByState;
+import org.broadinstitute.sting.gatk.iterators.StingSAMIterator;
+import org.broadinstitute.sting.utils.GenomeLoc;
 import org.broadinstitute.sting.utils.GenomeLocParser;
+import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
+
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.List;
+import java.util.NoSuchElementException;
 
 /**
  * Buffer shards of data which may or may not contain multiple loci into
@@ -34,7 +38,7 @@ public class WindowMaker implements Iterable<WindowMaker.WindowMakerIterator>, I
     /**
      * The data source for reads.  Will probably come directly from the BAM file.
      */
-    private final Iterator<AlignmentContext> sourceIterator;
+    private final PeekableIterator<AlignmentContext> sourceIterator;
 
     /**
      * Stores the sequence of intervals that the windowmaker should be tracking.
@@ -59,15 +63,18 @@ public class WindowMaker implements Iterable<WindowMaker.WindowMakerIterator>, I
      * the given intervals.
      * @param iterator The data source for this window.
      * @param intervals The set of intervals over which to traverse.
-     * @param sampleData SampleDataSource that we can reference reads with
+     * @param sampleNames The complete set of sample names in the reads in shard
      */
 
-    public WindowMaker(Shard shard, GenomeLocParser genomeLocParser, StingSAMIterator iterator, List<GenomeLoc> intervals, SampleDataSource sampleData ) {
+    public WindowMaker(Shard shard, GenomeLocParser genomeLocParser, StingSAMIterator iterator, List<GenomeLoc> intervals, Collection<String> sampleNames) {
         this.sourceInfo = shard.getReadProperties();
         this.readIterator = iterator;
-
-        this.sourceIterator = new LocusIteratorByState(iterator,sourceInfo,genomeLocParser,sampleData);
+        this.sourceIterator = new PeekableIterator<AlignmentContext>(new LocusIteratorByState(iterator,sourceInfo,genomeLocParser, sampleNames));
         this.intervalIterator = intervals.size()>0 ? new PeekableIterator<GenomeLoc>(intervals.iterator()) : null;
+    }
+
+    public WindowMaker(Shard shard, GenomeLocParser genomeLocParser, StingSAMIterator iterator, List<GenomeLoc> intervals ) {
+        this(shard, genomeLocParser, iterator, intervals, LocusIteratorByState.sampleListForSAMWithoutReadGroups());
     }
 
     public Iterator<WindowMakerIterator> iterator() {
@@ -97,11 +104,6 @@ public class WindowMaker implements Iterable<WindowMaker.WindowMakerIterator>, I
          */
         private final GenomeLoc locus;
 
-        /**
-         * Signal not to advance the iterator because we're currently sitting at the next element.
-         */
-        private boolean atNextElement = false;
-
         public WindowMakerIterator(GenomeLoc locus) {
             this.locus = locus;
             advance();
@@ -121,58 +123,45 @@ public class WindowMaker implements Iterable<WindowMaker.WindowMakerIterator>, I
 
         public boolean hasNext() {
             advance();
-            return atNextElement;
+            return currentAlignmentContext != null;
         }
 
         public AlignmentContext next() {
-            advance();
-            if(!atNextElement) throw new NoSuchElementException("WindowMakerIterator is out of elements for this interval.");
+            if(!hasNext()) throw new NoSuchElementException("WindowMakerIterator is out of elements for this interval.");
 
-            // Prepare object state for no next element.
+            // Consume this alignment context.
             AlignmentContext toReturn = currentAlignmentContext;
             currentAlignmentContext = null;
-            atNextElement = false;
 
             // Return the current element.
             return toReturn;
         }
 
         private void advance() {
-            // No shard boundaries specified.  If currentAlignmentContext has been consumed, grab the next one.
-            if(locus == null) {
-                if(!atNextElement && sourceIterator.hasNext()) {
-                    currentAlignmentContext = sourceIterator.next();
-                    atNextElement = true;
-                }
-                return;
-            }
-
-            // Can't possibly find another element.  Skip out early.
-            if(currentAlignmentContext == null && !sourceIterator.hasNext())
-                return;
-
             // Need to find the next element that is not past shard boundaries.  If we travel past the edge of
             // shard boundaries, stop and let the next interval pick it up.
-            while(sourceIterator.hasNext()) {
-                // Seed the current alignment context first time through the loop.
-                if(currentAlignmentContext == null)
-                    currentAlignmentContext = sourceIterator.next();
+            while(currentAlignmentContext == null && sourceIterator.hasNext()) {
+                // Advance the iterator and try again.
+                AlignmentContext candidateAlignmentContext = sourceIterator.peek();
 
-                // Found a match.
-                if(locus.containsP(currentAlignmentContext.getLocation())) {
-                    atNextElement = true;
+                if(locus == null) {
+                    // No filter present.  Return everything that LocusIteratorByState provides us.
+                    currentAlignmentContext = sourceIterator.next();
+                }
+                else if(locus.isPast(candidateAlignmentContext.getLocation()))
+                    // Found a locus before the current window; claim this alignment context and throw it away.
+                    sourceIterator.next();
+                else if(locus.containsP(candidateAlignmentContext.getLocation())) {
+                    // Found a locus within the current window; claim this alignment context and call it the next entry.
+                    currentAlignmentContext = sourceIterator.next();
+                }
+                else if(locus.isBefore(candidateAlignmentContext.getLocation())) {
+                    // Whoops.  Skipped passed the end of the region.  Iteration for this window is complete.  Do
+                    // not claim this alignment context in case it is part of the next shard.
                     break;
                 }
-                // Whoops.  Skipped passed the end of the region.  Iteration for this window is complete.
-                if(locus.isBefore(currentAlignmentContext.getLocation()))
-                    break;
-
-                // No more elements to examine.  Iteration is complete.
-                if(!sourceIterator.hasNext())
-                    break;
-
-                // Advance the iterator and try again.
-                currentAlignmentContext = sourceIterator.next();
+                else
+                    throw new ReviewedStingException("BUG: filtering locus does not contain, is not before, and is not past the given alignment context");
             }
         }
     }

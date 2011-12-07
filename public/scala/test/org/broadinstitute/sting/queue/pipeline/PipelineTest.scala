@@ -31,42 +31,26 @@ import org.broadinstitute.sting.commandline.CommandLineProgram
 import java.util.Date
 import java.text.SimpleDateFormat
 import org.broadinstitute.sting.BaseTest
+import org.broadinstitute.sting.MD5DB
 import org.broadinstitute.sting.queue.QCommandLine
-import org.broadinstitute.sting.datasources.pipeline.{Pipeline, PipelineProject, PipelineSample}
-import org.broadinstitute.sting.utils.broad.PicardAggregationUtils
-import org.broadinstitute.sting.queue.util.{Logging, ProcessController}
-import java.io.{FileNotFoundException, File}
-import org.broadinstitute.sting.gatk.report.GATKReportParser
+import org.broadinstitute.sting.queue.util.Logging
+import java.io.File
+import org.broadinstitute.sting.gatk.report.GATKReport
 import org.apache.commons.io.FileUtils
 import org.broadinstitute.sting.queue.engine.CommandLinePluginManager
 
 object PipelineTest extends BaseTest with Logging {
 
-  case class K1gBam(squidId: String, sampleId: String, version: Int)
-
-  /** 1000G BAMs used for validation */
-  val k1gBams = List(
-    new K1gBam("C474", "NA19651", 2),
-    new K1gBam("C474", "NA19655", 2),
-    new K1gBam("C474", "NA19669", 2),
-    new K1gBam("C454", "NA19834", 2),
-    new K1gBam("C460", "HG01440", 2),
-    new K1gBam("C456", "NA12342", 2),
-    new K1gBam("C456", "NA12748", 2),
-    new K1gBam("C474", "NA19649", 2),
-    new K1gBam("C474", "NA19652", 2),
-    new K1gBam("C474", "NA19654", 2))
-
-  validateK1gBams()
-
   private val validationReportsDataLocation = "/humgen/gsa-hpprojects/GATK/validationreports/submitted/"
 
-  val run = System.getProperty("pipeline.run") == "run"
+  final val run = System.getProperty("pipeline.run") == "run"
 
-  private val jobRunners = {
+  final val allJobRunners = {
     val commandLinePluginManager = new CommandLinePluginManager
-    commandLinePluginManager.getPlugins.map(commandLinePluginManager.getName(_)).filterNot(_ == "Shell")
+    commandLinePluginManager.getPlugins.map(commandLinePluginManager.getName(_)).toList
   }
+
+  final val defaultJobRunners = List("Lsf706", "GridEngine")
 
   /**
    * Returns the top level output path to this test.
@@ -93,56 +77,16 @@ object PipelineTest extends BaseTest with Logging {
   private def tempDir(testName: String, jobRunner: String) = testDir(testName, jobRunner) + "temp/"
 
   /**
-   * Creates a new pipeline from a project.
-   * @param project Pipeline project info.
-   * @param samples List of samples.
-   * @return a new pipeline project.
-   */
-  def createPipeline(project: PipelineProject, samples: List[PipelineSample]) = {
-    val pipeline = new Pipeline
-    pipeline.setProject(project)
-    pipeline.setSamples(samples)
-    pipeline
-  }
-
-  /**
-   * Creates a new pipeline project for hg19 with b37 132 dbsnp for genotyping, and b37 129 dbsnp for eval.
-   * @param projectName Name of the project.
-   * @param intervals The intervals file to use.
-   * @return a new pipeline project.
-   */
-  def createHg19Project(projectName: String, intervals: String) = {
-    val project = new PipelineProject
-    project.setName(projectName)
-    project.setReferenceFile(new File(BaseTest.hg19Reference))
-    project.setGenotypeDbsnp(new File(BaseTest.b37dbSNP132))
-    project.setEvalDbsnp(new File(BaseTest.b37dbSNP129))
-    project.setRefseqTable(new File(BaseTest.hg19Refseq))
-    project.setIntervalList(new File(intervals))
-    project
-  }
-
-  /**
-   * Creates a 1000G pipeline sample from one of the bams.
-   * @param idPrefix Text to prepend to the sample name.
-   * @param k1gBam bam to create the sample for.
-   * @return the created pipeline sample.
-   */
-  def createK1gSample(idPrefix: String, k1gBam: K1gBam) = {
-    val sample = new PipelineSample
-    sample.setId(idPrefix + "_" + k1gBam.sampleId)
-    sample.setBamFiles(Map("cleaned" -> getPicardBam(k1gBam)))
-    sample
-  }
-
-  /**
    * Runs the pipelineTest.
    * @param pipelineTest test to run.
    */
   def executeTest(pipelineTest: PipelineTestSpec) {
+    var jobRunners = pipelineTest.jobRunners
+    if (jobRunners == null)
+      jobRunners = defaultJobRunners;
     jobRunners.foreach(executeTest(pipelineTest, _))
   }
-  
+
   /**
    * Runs the pipelineTest.
    * @param pipelineTest test to run.
@@ -167,7 +111,7 @@ object PipelineTest extends BaseTest with Logging {
   private def assertMatchingMD5s(name: String, fileMD5s: Traversable[(File, String)], parameterize: Boolean) {
     var failed = 0
     for ((file, expectedMD5) <- fileMD5s) {
-      val calculatedMD5 = BaseTest.testFileMD5(name, file, expectedMD5, parameterize)
+      val calculatedMD5 = MD5DB.testFileMD5(name, file, expectedMD5, parameterize)
       if (!parameterize && expectedMD5 != "" && expectedMD5 != calculatedMD5)
         failed += 1
     }
@@ -179,12 +123,11 @@ object PipelineTest extends BaseTest with Logging {
     // write the report to the shared validation data location
     val formatter = new SimpleDateFormat("yyyy.MM.dd.HH.mm.ss")
     val reportLocation = "%s%s/%s/validation.%s.eval".format(validationReportsDataLocation, jobRunner, name, formatter.format(new Date))
-    val report = new File(reportLocation)
+    val reportFile = new File(reportLocation)
 
-    FileUtils.copyFile(new File(runDir(name, jobRunner) + evalSpec.evalReport), report);
+    FileUtils.copyFile(new File(runDir(name, jobRunner) + evalSpec.evalReport), reportFile);
 
-    val parser = new GATKReportParser
-    parser.parse(report)
+    val report = new GATKReport(reportFile);
 
     var allInRange = true
 
@@ -192,7 +135,9 @@ object PipelineTest extends BaseTest with Logging {
     println(name + " validation values:")
     println("    value (min,target,max) table key metric")
     for (validation <- evalSpec.validations) {
-      val value = parser.getValue(validation.table, validation.key, validation.metric)
+      val table = report.getTable(validation.table)
+      val key = table.getPrimaryKey(validation.key)
+      val value = String.valueOf(table.get(key, validation.metric))
       val inRange = if (value == null) false else validation.inRange(value)
       val flag = if (!inRange) "*" else " "
       println("  %s %s (%s,%s,%s) %s %s %s".format(flag, value, validation.min, validation.target, validation.max, validation.table, validation.key, validation.metric))
@@ -267,41 +212,11 @@ object PipelineTest extends BaseTest with Logging {
     }
   }
 
-  /**
-   * Throws an exception if any of the 1000G bams do not exist and warns if they are out of date.
-   */
-  private def validateK1gBams() {
-    var missingBams = List.empty[File]
-    for (k1gBam <- k1gBams) {
-      val latest = getLatestVersion(k1gBam)
-      val bam = getPicardBam(k1gBam)
-      if (k1gBam.version != latest)
-        logger.warn("1000G bam is not the latest version %d: %s".format(latest, k1gBam))
-      if (!bam.exists)
-        missingBams :+= bam
-    }
-    if (missingBams.size > 0) {
-      val nl = "%n".format()
-      throw new FileNotFoundException("The following 1000G bam files are missing.%n%s".format(missingBams.mkString(nl)))
-    }
-  }
-
-  private def getPicardBam(k1gBam: K1gBam): File =
-    new File(PicardAggregationUtils.getSampleBam(k1gBam.squidId, k1gBam.sampleId, k1gBam.version))
-
-  private def getLatestVersion(k1gBam: K1gBam): Int =
-    PicardAggregationUtils.getLatestVersion(k1gBam.squidId, k1gBam.sampleId, k1gBam.version)
-
   private var runningCommandLines = Set.empty[QCommandLine]
 
   Runtime.getRuntime.addShutdownHook(new Thread {
     /** Cleanup as the JVM shuts down. */
     override def run() {
-      try {
-        ProcessController.shutdown()
-      } catch {
-        case _ => /*ignore */
-      }
       runningCommandLines.foreach(commandLine =>
         try {
           commandLine.shutdown()

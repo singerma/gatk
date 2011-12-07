@@ -1,16 +1,21 @@
 package org.broadinstitute.sting.gatk.io.storage;
 
+import net.sf.samtools.util.BlockCompressedOutputStream;
 import org.apache.log4j.Logger;
 import org.broad.tribble.source.BasicFeatureSource;
-import org.broadinstitute.sting.utils.codecs.vcf.*;
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
-import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
 import org.broadinstitute.sting.gatk.io.stubs.VCFWriterStub;
-
-import java.io.*;
-
-import net.sf.samtools.util.BlockCompressedOutputStream;
+import org.broadinstitute.sting.utils.codecs.vcf.StandardVCFWriter;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFCodec;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFHeader;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFWriter;
+import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
 import org.broadinstitute.sting.utils.exceptions.UserException;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.PrintStream;
 
 /**
  * Provides temporary and permanent storage for genotypes in VCF format.
@@ -41,7 +46,7 @@ public class VCFWriterStorage implements Storage<VCFWriterStorage>, VCFWriter {
         else if ( stub.getOutputStream() != null ) {
             this.file = null;
             this.stream = stub.getOutputStream();
-            writer = new StandardVCFWriter(stream, stub.doNotWriteGenotypes());
+            writer = new StandardVCFWriter(stream, stub.getMasterSequenceDictionary(), stub.doNotWriteGenotypes());
         }
         else
             throw new ReviewedStingException("Unable to create target to which to write; storage was provided with neither a file nor a stream.");
@@ -66,7 +71,7 @@ public class VCFWriterStorage implements Storage<VCFWriterStorage>, VCFWriter {
         }
 
         // The GATK/Tribble can't currently index block-compressed files on the fly.  Disable OTF indexing even if the user explicitly asked for it.
-        return new StandardVCFWriter(file, this.stream, indexOnTheFly && !stub.isCompressed(), stub.doNotWriteGenotypes());
+        return new StandardVCFWriter(file, this.stream, stub.getMasterSequenceDictionary(), indexOnTheFly && !stub.isCompressed(), stub.doNotWriteGenotypes());
     }
 
 
@@ -82,8 +87,8 @@ public class VCFWriterStorage implements Storage<VCFWriterStorage>, VCFWriter {
         writer.writeHeader(stub.getVCFHeader());
     }
 
-    public void add(VariantContext vc, byte ref) {
-        writer.add(vc, ref);
+    public void add(VariantContext vc) {
+        writer.add(vc);
     }
 
     /**
@@ -112,7 +117,7 @@ public class VCFWriterStorage implements Storage<VCFWriterStorage>, VCFWriter {
             BasicFeatureSource<VariantContext> source = BasicFeatureSource.getFeatureSource(file.getAbsolutePath(), new VCFCodec(), false);
             
             for ( VariantContext vc : source.iterator() ) {
-                target.writer.add(vc, vc.getReferenceBaseForIndel());
+                target.writer.add(vc);
             }
 
             source.close();

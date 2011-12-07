@@ -25,24 +25,28 @@
 
 package org.broadinstitute.sting.gatk.walkers.annotator;
 
-import org.broadinstitute.sting.utils.variantcontext.Genotype;
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLineType;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFInfoHeaderLine;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
 import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
+import org.broadinstitute.sting.gatk.walkers.annotator.interfaces.AnnotatorCompatibleWalker;
 import org.broadinstitute.sting.gatk.walkers.annotator.interfaces.InfoFieldAnnotation;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLineCount;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLineType;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFInfoHeaderLine;
+import org.broadinstitute.sting.utils.variantcontext.Genotype;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * List all of the polymorphic samples.
+ */
+public class SampleList extends InfoFieldAnnotation {
 
-public class SampleList implements InfoFieldAnnotation {
-
-    public Map<String, Object> annotate(RefMetaDataTracker tracker, ReferenceContext ref, Map<String, AlignmentContext> stratifiedContexts, VariantContext vc) {
+    public Map<String, Object> annotate(RefMetaDataTracker tracker, AnnotatorCompatibleWalker walker, ReferenceContext ref, Map<String, AlignmentContext> stratifiedContexts, VariantContext vc) {
         if ( vc.isMonomorphic() || !vc.hasGenotypes() )
             return null;
 
@@ -65,5 +69,5 @@ public class SampleList implements InfoFieldAnnotation {
 
     public List<String> getKeyNames() { return Arrays.asList("Samples"); }
 
-    public List<VCFInfoHeaderLine> getDescriptions() { return Arrays.asList(new VCFInfoHeaderLine("Samples", VCFInfoHeaderLine.UNBOUNDED, VCFHeaderLineType.String, "List of polymorphic samples")); }
+    public List<VCFInfoHeaderLine> getDescriptions() { return Arrays.asList(new VCFInfoHeaderLine("Samples", VCFHeaderLineCount.UNBOUNDED, VCFHeaderLineType.String, "List of polymorphic samples")); }
 }

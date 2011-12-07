@@ -71,6 +71,7 @@ public final class VCFConstants {
     public static final char   FIELD_SEPARATOR_CHAR = '\t';
     public static final String FILTER_CODE_SEPARATOR = ";";
     public static final String INFO_FIELD_ARRAY_SEPARATOR = ",";
+    public static final char INFO_FIELD_ARRAY_SEPARATOR_CHAR = ',';
     public static final String ID_FIELD_SEPARATOR = ";";
     public static final String INFO_FIELD_SEPARATOR = ";";
     public static final char INFO_FIELD_SEPARATOR_CHAR = ';';
@@ -99,6 +100,8 @@ public final class VCFConstants {
     public static final String MISSING_DEPTH_v3 = "-1";
     public static final String UNBOUNDED_ENCODING_v4 = ".";
     public static final String UNBOUNDED_ENCODING_v3 = "-1";
+    public static final String PER_ALLELE_COUNT = "A";
+    public static final String PER_GENOTYPE_COUNT = "G";
     public static final String EMPTY_ALLELE = ".";
     public static final String EMPTY_GENOTYPE = "./.";
     public static final double MAX_GENOTYPE_QUAL = 99.0;

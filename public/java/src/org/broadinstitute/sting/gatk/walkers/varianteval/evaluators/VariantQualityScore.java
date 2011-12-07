@@ -25,16 +25,16 @@
 
 package org.broadinstitute.sting.gatk.walkers.varianteval.evaluators;
 
-import org.broadinstitute.sting.utils.variantcontext.Allele;
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
-import org.broadinstitute.sting.utils.variantcontext.VariantContextUtils;
 import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
-import org.broadinstitute.sting.gatk.walkers.varianteval.tags.Analysis;
-import org.broadinstitute.sting.gatk.walkers.varianteval.tags.DataPoint;
+import org.broadinstitute.sting.gatk.walkers.varianteval.util.Analysis;
+import org.broadinstitute.sting.gatk.walkers.varianteval.util.DataPoint;
 import org.broadinstitute.sting.gatk.walkers.varianteval.util.TableType;
 import org.broadinstitute.sting.utils.collections.Pair;
+import org.broadinstitute.sting.utils.variantcontext.Allele;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
+import org.broadinstitute.sting.utils.variantcontext.VariantContextUtils;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -232,7 +232,7 @@ public class VariantQualityScore extends VariantEvaluator {
     public String update1(VariantContext eval, RefMetaDataTracker tracker, ReferenceContext ref, AlignmentContext context) {
         final String interesting = null;
 
-        if( eval != null && eval.isSNP() && eval.isBiallelic() ) { //BUGBUG: only counting biallelic sites (revisit what to do with triallelic sites)
+        if( eval != null && eval.isSNP() && eval.isBiallelic() && eval.isPolymorphic() ) { //BUGBUG: only counting biallelic sites (revisit what to do with triallelic sites)
             if( titvStats == null ) { titvStats = new TiTvStats(); }
             titvStats.incrValue(eval.getPhredScaledQual(), VariantContextUtils.isTransition(eval));
 

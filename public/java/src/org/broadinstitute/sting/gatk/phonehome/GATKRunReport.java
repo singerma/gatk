@@ -26,19 +26,15 @@ package org.broadinstitute.sting.gatk.phonehome;
 
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
-import org.broadinstitute.sting.commandline.CommandLineUtils;
 import org.broadinstitute.sting.gatk.CommandLineGATK;
 import org.broadinstitute.sting.gatk.GenomeAnalysisEngine;
-import org.broadinstitute.sting.gatk.arguments.GATKArgumentCollection;
 import org.broadinstitute.sting.gatk.walkers.Walker;
-import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
 import org.broadinstitute.sting.utils.Utils;
-import org.broadinstitute.sting.utils.exceptions.StingException;
+import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
 import org.broadinstitute.sting.utils.exceptions.UserException;
 import org.jets3t.service.S3Service;
 import org.jets3t.service.S3ServiceException;
 import org.jets3t.service.impl.rest.httpclient.RestS3Service;
-import org.jets3t.service.model.S3Bucket;
 import org.jets3t.service.model.S3Object;
 import org.jets3t.service.security.AWSCredentials;
 import org.simpleframework.xml.Element;
@@ -49,7 +45,6 @@ import org.simpleframework.xml.stream.Format;
 import org.simpleframework.xml.stream.HyphenStyle;
 
 import java.io.*;
-import java.net.InetAddress;
 import java.security.NoSuchAlgorithmException;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
@@ -105,9 +100,6 @@ public class GATKRunReport {
     @Element(required = false, name = "exception")
     private final ExceptionToXML mException;
 
-    @Element(required = false, name = "argument_collection")
-    private final GATKArgumentCollection mCollection;
-
     @Element(required = true, name = "working_directory")
     private String currentPath;
 
@@ -157,9 +149,13 @@ public class GATKRunReport {
     private long nReads;
 
     public enum PhoneHomeOption {
+        /** Disable phone home */
         NO_ET,
+        /** Standard option.  Writes to local repository if it can be found, or S3 otherwise */
         STANDARD,
+        /** Force output to STDOUT.  For debugging only */
         STDOUT,
+        /** Force output to S3.  For debugging only */
         AWS_S3   // todo -- remove me -- really just for testing purposes
     }
 
@@ -187,7 +183,6 @@ public class GATKRunReport {
             cmdLine = engine.createApproximateCommandLineArgumentString(engine, walker);
         } catch (Exception ignore) { }
 
-        this.mCollection = engine.getArguments();
         walkerName = engine.getWalkerName(walker.getClass());
         svnVersion = CommandLineGATK.getVersionNumber();
 
@@ -228,22 +223,6 @@ public class GATKRunReport {
         return id;
     }
 
-
-    /**
-     * Helper utility that calls into the InetAddress system to resolve the hostname.  If this fails,
-     * unresolvable gets returned instead.
-     *
-     * @return
-     */
-    private String resolveHostname() {
-        try {
-            return InetAddress.getLocalHost().getCanonicalHostName();
-        }
-        catch (java.net.UnknownHostException uhe) { // [beware typo in code sample -dmw]
-            return "unresolvable";
-            // handle exception
-        }
-    }
 
     public void postReport(PhoneHomeOption type) {
         logger.debug("Posting report of type " + type);
@@ -309,25 +288,27 @@ public class GATKRunReport {
      * That is, postReport() is guarenteed not to fail for any reason.
      */
     private File postReportToLocalDisk(File rootDir) {
+        String filename = getID() + ".report.xml.gz";
+        File file = new File(rootDir, filename);
         try {
-            String filename = getID() + ".report.xml.gz";
-            File file = new File(rootDir, filename);
             postReportToFile(file);
             logger.debug("Wrote report to " + file);
             return file;
         } catch ( Exception e ) {
             // we catch everything, and no matter what eat the error
             exceptDuringRunReport("Couldn't read report file", e);
+            file.delete();
             return null;
         }
     }
 
     private void postReportToAWSS3() {
         // modifying example code from http://jets3t.s3.amazonaws.com/toolkit/code-samples.html
-        this.hostName = resolveHostname(); // we want to fill in the host name
+        this.hostName = Utils.resolveHostname(); // we want to fill in the host name
         File localFile = postReportToLocalDisk(new File("./"));
         logger.debug("Generating GATK report to AWS S3 based on local file " + localFile);
         if ( localFile != null ) { // we succeeded in creating the local file
+            localFile.deleteOnExit();
             try {
                 // stop us from printing the annoying, and meaningless, mime types warning
                 Logger mimeTypeLogger = Logger.getLogger(org.jets3t.service.utils.Mimetypes.class);
@@ -352,14 +333,13 @@ public class GATKRunReport {
                 //logger.info("Uploading " + localFile + " to AWS bucket");
                 S3Object s3Object = s3Service.putObject(REPORT_BUCKET_NAME, fileObject);
                 logger.debug("Uploaded to AWS: " + s3Object);
+                logger.info("Uploaded run statistics report to AWS S3");
             } catch ( S3ServiceException e ) {
                 exceptDuringRunReport("S3 exception occurred", e);
             } catch ( NoSuchAlgorithmException e ) {
                 exceptDuringRunReport("Couldn't calculate MD5", e);
             } catch ( IOException e ) {
                 exceptDuringRunReport("Couldn't read report file", e);
-            } finally {
-                localFile.delete();
             }
         }
     }

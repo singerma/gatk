@@ -25,16 +25,20 @@
 
 package org.broadinstitute.sting.commandline;
 
-import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
-import org.broadinstitute.sting.utils.collections.Pair;
-import org.broadinstitute.sting.utils.classloader.JVMUtils;
+import com.google.java.contract.Requires;
+import org.apache.commons.io.FileUtils;
+import org.apache.log4j.Logger;
 import org.broadinstitute.sting.utils.Utils;
+import org.broadinstitute.sting.utils.classloader.JVMUtils;
+import org.broadinstitute.sting.utils.collections.Pair;
+import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
 import org.broadinstitute.sting.utils.exceptions.UserException;
 import org.broadinstitute.sting.utils.help.ApplicationDetails;
 import org.broadinstitute.sting.utils.help.HelpFormatter;
-import org.apache.log4j.Logger;
 
-import java.lang.reflect.*;
+import java.io.File;
+import java.io.IOException;
+import java.lang.reflect.Field;
 import java.util.*;
 
 /**
@@ -42,10 +46,15 @@ import java.util.*;
  */
 public class ParsingEngine {
     /**
+     * The loaded argument sources along with their back definitions.
+     */
+    private Map<ArgumentDefinition,ArgumentSource> argumentSourcesByDefinition = new HashMap<ArgumentDefinition,ArgumentSource>();
+
+    /**
      * A list of defined arguments against which command lines are matched.
      * Package protected for testing access.
      */
-    ArgumentDefinitions argumentDefinitions = new ArgumentDefinitions();
+    public ArgumentDefinitions argumentDefinitions = new ArgumentDefinitions();
 
     /**
      * A list of matches from defined arguments to command-line text.
@@ -60,10 +69,17 @@ public class ParsingEngine {
     private List<ParsingMethod> parsingMethods = new ArrayList<ParsingMethod>();
 
     /**
+     * All of the RodBinding objects we've seen while parsing
+     */
+    private List<RodBinding> rodBindings = new ArrayList<RodBinding>();
+
+    /**
      * Class reference to the different types of descriptors that the create method can create.
      * The type of set used must be ordered (but not necessarily sorted).
      */
     private static final Set<ArgumentTypeDescriptor> STANDARD_ARGUMENT_TYPE_DESCRIPTORS = new LinkedHashSet<ArgumentTypeDescriptor>( Arrays.asList(new SimpleArgumentTypeDescriptor(),
+            new IntervalBindingArgumentTypeDescriptor(),
+            new RodBindingArgumentTypeDescriptor(),
             new CompoundArgumentTypeDescriptor(),
             new MultiplexArgumentTypeDescriptor()) );
 
@@ -80,6 +96,7 @@ public class ParsingEngine {
     protected static Logger logger = Logger.getLogger(ParsingEngine.class);
 
     public ParsingEngine( CommandLineProgram clp ) {
+        RodBinding.resetNameCounter();
         parsingMethods.add( ParsingMethod.FullNameParsingMethod );
         parsingMethods.add( ParsingMethod.ShortNameParsingMethod );
 
@@ -87,6 +104,8 @@ public class ParsingEngine {
         if(clp != null)
             argumentTypeDescriptors.addAll(clp.getArgumentTypeDescriptors());
         argumentTypeDescriptors.addAll(STANDARD_ARGUMENT_TYPE_DESCRIPTORS);
+
+        addArgumentSource(ParsingEngineArgumentFiles.class);
     }
 
     /**
@@ -107,8 +126,13 @@ public class ParsingEngine {
      */
     public void addArgumentSource( String sourceName, Class sourceClass ) {
         List<ArgumentDefinition> argumentsFromSource = new ArrayList<ArgumentDefinition>();
-        for( ArgumentSource argumentSource: extractArgumentSources(sourceClass) )
-            argumentsFromSource.addAll( argumentSource.createArgumentDefinitions() );
+        for( ArgumentSource argumentSource: extractArgumentSources(sourceClass) ) {
+            List<ArgumentDefinition> argumentDefinitions = argumentSource.createArgumentDefinitions();
+            for(ArgumentDefinition argumentDefinition: argumentDefinitions) {
+                argumentSourcesByDefinition.put(argumentDefinition,argumentSource);
+                argumentsFromSource.add( argumentDefinition );
+            }
+        }
         argumentDefinitions.add( new ArgumentDefinitionGroup(sourceName, argumentsFromSource) );
     }
 
@@ -130,21 +154,43 @@ public class ParsingEngine {
      * command-line arguments to the arguments that are actually
      * required.
      * @param tokens Tokens passed on the command line.
+     * @return The parsed arguments by file.
      */
-    public void parse( String[] tokens ) {
+    public SortedMap<ArgumentMatchSource, List<String>> parse( String[] tokens ) {
         argumentMatches = new ArgumentMatches();
+        SortedMap<ArgumentMatchSource, List<String>> parsedArgs = new TreeMap<ArgumentMatchSource, List<String>>();
 
-        int lastArgumentMatchSite = -1;
+        List<String> cmdLineTokens = Arrays.asList(tokens);
+        parse(ArgumentMatchSource.COMMAND_LINE, cmdLineTokens, argumentMatches, parsedArgs);
 
-        for( int i = 0; i < tokens.length; i++ ) {
-            String token = tokens[i];
+        ParsingEngineArgumentFiles argumentFiles = new ParsingEngineArgumentFiles();
+
+        // Load the arguments ONLY into the argument files.
+        // Validation may optionally run on the rest of the arguments.
+        loadArgumentsIntoObject(argumentFiles);
+
+        for (File file: argumentFiles.files) {
+            List<String> fileTokens = getArguments(file);
+            parse(new ArgumentMatchSource(file), fileTokens, argumentMatches, parsedArgs);
+        }
+
+        return parsedArgs;
+    }
+
+    private void parse(ArgumentMatchSource matchSource, List<String> tokens,
+                       ArgumentMatches argumentMatches, SortedMap<ArgumentMatchSource, List<String>> parsedArgs) {
+        ArgumentMatchSite lastArgumentMatchSite = new ArgumentMatchSite(matchSource, -1);
+
+        int i = 0;
+        for (String token: tokens) {
             // If the token is of argument form, parse it into its own argument match.
             // Otherwise, pair it with the most recently used argument discovered.
+            ArgumentMatchSite site = new ArgumentMatchSite(matchSource, i);
             if( isArgumentForm(token) ) {
-                ArgumentMatch argumentMatch = parseArgument( token, i );
+                ArgumentMatch argumentMatch = parseArgument( token, site );
                 if( argumentMatch != null ) {
                     argumentMatches.mergeInto( argumentMatch );
-                    lastArgumentMatchSite = i;
+                    lastArgumentMatchSite = site;
                 }
             }
             else {
@@ -152,10 +198,31 @@ public class ParsingEngine {
                     !argumentMatches.getMatch(lastArgumentMatchSite).hasValueAtSite(lastArgumentMatchSite))
                     argumentMatches.getMatch(lastArgumentMatchSite).addValue( lastArgumentMatchSite, token );
                 else
-                    argumentMatches.MissingArgument.addValue( i, token );
+                    argumentMatches.MissingArgument.addValue( site, token );
 
             }
+            i++;
         }
+
+        parsedArgs.put(matchSource, tokens);
+    }
+
+    private List<String> getArguments(File file) {
+        try {
+            if (file.getAbsolutePath().endsWith(".list")) {
+                return getListArguments(file);
+            }
+        } catch (IOException e) {
+            throw new UserException.CouldNotReadInputFile(file, e);
+        }
+        throw new UserException.CouldNotReadInputFile(file, "file extension is not .list");
+    }
+
+    private List<String> getListArguments(File file) throws IOException {
+        ArrayList<String> argsList = new ArrayList<String>();
+        for (String line: FileUtils.readLines(file))
+            argsList.addAll(Arrays.asList(Utils.escapeExpressions(line)));
+        return argsList;
     }
 
     public enum ValidationType { MissingRequiredArgument,
@@ -199,16 +266,25 @@ public class ParsingEngine {
                 throw new InvalidArgumentException( invalidArguments );
         }
 
-        // Find invalid argument values (arguments that fail the regexp test.
+        // Find invalid argument values -- invalid arguments are either completely missing or fail the specified 'validation' regular expression.
         if( !skipValidationOf.contains(ValidationType.InvalidArgumentValue) ) {
             Collection<ArgumentDefinition> verifiableArguments = 
                     argumentDefinitions.findArgumentDefinitions( null, ArgumentDefinitions.VerifiableDefinitionMatcher );
             Collection<Pair<ArgumentDefinition,String>> invalidValues = new ArrayList<Pair<ArgumentDefinition,String>>();
             for( ArgumentDefinition verifiableArgument: verifiableArguments ) {
                 ArgumentMatches verifiableMatches = argumentMatches.findMatches( verifiableArgument );
+                // Check to see whether an argument value was specified.  Argument values must be provided
+                // when the argument name is specified and the argument is not a flag type.
+                for(ArgumentMatch verifiableMatch: verifiableMatches) {
+                    ArgumentSource argumentSource = argumentSourcesByDefinition.get(verifiableArgument);
+                    if(verifiableMatch.values().size() == 0 && !verifiableArgument.isFlag && argumentSource.createsTypeDefault())
+                        invalidValues.add(new Pair<ArgumentDefinition,String>(verifiableArgument,null));
+                }
+
+                // Ensure that the field contents meet the validation criteria specified by the regular expression.
                 for( ArgumentMatch verifiableMatch: verifiableMatches ) {
                     for( String value: verifiableMatch.values() ) {
-                        if( !value.matches(verifiableArgument.validation) )
+                        if( verifiableArgument.validation != null && !value.matches(verifiableArgument.validation) )
                             invalidValues.add( new Pair<ArgumentDefinition,String>(verifiableArgument, value) );
                     }
                 }
@@ -304,7 +380,17 @@ public class ParsingEngine {
         if(!tags.containsKey(key))
             return new Tags();
         return tags.get(key);
-    }    
+    }
+
+    /**
+     * Add a RodBinding type argument to this parser.  Called during parsing to allow
+     * us to track all of the RodBindings discovered in the command line.
+     * @param rodBinding the rodbinding to add.  Must not be added twice
+     */
+    @Requires("rodBinding != null")
+    public void addRodBinding(final RodBinding rodBinding) {
+        rodBindings.add(rodBinding);
+    }
 
     /**
      * Notify the user that a deprecated command-line argument has been used.
@@ -327,7 +413,7 @@ public class ParsingEngine {
      */
     private void loadValueIntoObject( ArgumentSource source, Object instance, ArgumentMatches argumentMatches ) {
         // Nothing to load
-        if( argumentMatches.size() == 0 && !(source.createsTypeDefault() && source.isRequired()))
+        if( argumentMatches.size() == 0 && ! source.createsTypeDefault() )
             return;
 
         // Target instance into which to inject the value.
@@ -342,6 +428,10 @@ public class ParsingEngine {
 
             JVMUtils.setFieldValue(source.field,target,value);
         }
+    }
+
+    public Collection<RodBinding> getRodBindings() {
+        return Collections.unmodifiableCollection(rodBindings);
     }
 
     /**
@@ -389,7 +479,6 @@ public class ParsingEngine {
     public ArgumentTypeDescriptor selectBestTypeDescriptor(Class type) {
         return ArgumentTypeDescriptor.selectBest(argumentTypeDescriptors,type);
     }
-
 
     private List<ArgumentSource> extractArgumentSources(Class sourceClass, Field[] parentFields) {
         // now simply call into the truly general routine extract argument bindings but with a null
@@ -454,7 +543,7 @@ public class ParsingEngine {
      * @param position The position of the token in question.
      * @return ArgumentMatch associated with this token, or null if no match exists.
      */    
-    private ArgumentMatch parseArgument( String token, int position ) {
+    private ArgumentMatch parseArgument( String token, ArgumentMatchSite position ) {
         if( !isArgumentForm(token) )
             throw new IllegalArgumentException( "Token is not recognizable as an argument: " + token );
 
@@ -515,10 +604,14 @@ class InvalidArgumentValueException extends ArgumentException {
     private static String formatArguments( Collection<Pair<ArgumentDefinition,String>> invalidArgumentValues ) {
         StringBuilder sb = new StringBuilder();
         for( Pair<ArgumentDefinition,String> invalidValue: invalidArgumentValues ) {
-            sb.append( String.format("%nArgument '--%s' has value of incorrect format: %s (should match %s)",
-                                     invalidValue.first.fullName,
-                                     invalidValue.second,
-                                     invalidValue.first.validation) );
+            if(invalidValue.getSecond() == null)
+                sb.append( String.format("%nArgument '--%s' requires a value but none was provided",
+                                         invalidValue.first.fullName) );
+            else
+                sb.append( String.format("%nArgument '--%s' has value of incorrect format: %s (should match %s)",
+                        invalidValue.first.fullName,
+                        invalidValue.second,
+                        invalidValue.first.validation) );
         }
         return sb.toString();
     }
@@ -535,9 +628,21 @@ class UnmatchedArgumentException extends ArgumentException {
 
     private static String formatArguments( ArgumentMatch invalidValues ) {
         StringBuilder sb = new StringBuilder();
-        for( int index: invalidValues.indices.keySet() )
-            for( String value: invalidValues.indices.get(index) ) {
-                sb.append( String.format("%nInvalid argument value '%s' at position %d.", value, index) );
+        for( ArgumentMatchSite site: invalidValues.sites.keySet() )
+            for( String value: invalidValues.sites.get(site) ) {
+                switch (site.getSource().getType()) {
+                    case CommandLine:
+                        sb.append( String.format("%nInvalid argument value '%s' at position %d.",
+                                value, site.getIndex()) );
+                        break;
+                    case File:
+                        sb.append( String.format("%nInvalid argument value '%s' in file %s at position %d.",
+                                value, site.getSource().getFile().getAbsolutePath(), site.getIndex()) );
+                        break;
+                    default:
+                        throw new RuntimeException( String.format("Unexpected argument match source type: %s",
+                                site.getSource().getType()));
+                }
                 if(value != null && Utils.dupString(' ',value.length()).equals(value))
                     sb.append("  Please make sure any line continuation backslashes on your command line are not followed by whitespace.");
             }
@@ -590,4 +695,13 @@ class UnknownEnumeratedValueException extends ArgumentException {
     private static String formatArguments(ArgumentDefinition definition, String argumentPassed) {
         return String.format("Invalid value %s specified for argument %s; valid options are (%s).", argumentPassed, definition.fullName, Utils.join(",",definition.validOptions));
     }
+}
+
+/**
+ * Container class to store the list of argument files.
+ * The files will be parsed after the command line arguments.
+ */
+class ParsingEngineArgumentFiles {
+    @Argument(fullName = "arg_file", shortName = "args", doc = "Reads arguments from the specified file", required = false)
+    public List<File> files = new ArrayList<File>();
 }

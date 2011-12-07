@@ -1,9 +1,12 @@
 package org.broadinstitute.sting.gatk.walkers;
 
-import org.broadinstitute.sting.gatk.filters.*;
-import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
+import org.broadinstitute.sting.gatk.filters.DuplicateReadFilter;
+import org.broadinstitute.sting.gatk.filters.FailsVendorQualityCheckFilter;
+import org.broadinstitute.sting.gatk.filters.NotPrimaryAlignmentFilter;
+import org.broadinstitute.sting.gatk.filters.UnmappedReadFilter;
+import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
 
 /**
  * Created by IntelliJ IDEA.
@@ -14,8 +17,8 @@ import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
  */
 @By(DataSource.READS)
 @Requires({DataSource.READS,DataSource.REFERENCE, DataSource.REFERENCE_BASES})
-@PartitionBy(PartitionType.INTERVAL)
-@ReadFilters({UnmappedReadFilter.class,NotPrimaryAlignmentReadFilter.class,DuplicateReadFilter.class,FailsVendorQualityCheckReadFilter.class})
+@PartitionBy(PartitionType.LOCUS)
+@ReadFilters({UnmappedReadFilter.class,NotPrimaryAlignmentFilter.class,DuplicateReadFilter.class,FailsVendorQualityCheckFilter.class})
 public abstract class LocusWalker<MapType, ReduceType> extends Walker<MapType, ReduceType> {
     // Do we actually want to operate on the context?
     public boolean filter(RefMetaDataTracker tracker, ReferenceContext ref, AlignmentContext context) {

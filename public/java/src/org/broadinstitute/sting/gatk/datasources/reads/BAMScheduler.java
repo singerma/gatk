@@ -26,20 +26,11 @@ package org.broadinstitute.sting.gatk.datasources.reads;
 
 import net.sf.picard.util.PeekableIterator;
 import net.sf.samtools.GATKBAMFileSpan;
-import org.apache.log4j.Logger;
+import net.sf.samtools.GATKChunk;
 import org.broadinstitute.sting.utils.GenomeLoc;
 import org.broadinstitute.sting.utils.GenomeLocSortedSet;
 
-import java.io.File;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.NoSuchElementException;
+import java.util.*;
 
 /**
  * Assign intervals to the most appropriate blocks, keeping as little as possible in memory at once.
@@ -94,7 +85,7 @@ public class BAMScheduler implements Iterator<FilePointer> {
             if(currentLocus == GenomeLoc.UNMAPPED) {
                 nextFilePointer = new FilePointer(GenomeLoc.UNMAPPED);
                 for(SAMReaderID id: dataSource.getReaderIDs())
-                    nextFilePointer.addFileSpans(id,new GATKBAMFileSpan());
+                    nextFilePointer.addFileSpans(id,new GATKBAMFileSpan(new GATKChunk(indexFiles.get(id).getStartOfLastLinearBin(),Long.MAX_VALUE)));
                 currentLocus = null;
                 continue;
             }

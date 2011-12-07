@@ -25,16 +25,15 @@
 
 package org.broadinstitute.sting.gatk.datasources.reference;
 
-import net.sf.picard.reference.ReferenceSequenceFileFactory;
-import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
-import net.sf.picard.reference.FastaSequenceIndexBuilder;
-import net.sf.picard.sam.CreateSequenceDictionary;
-import net.sf.picard.reference.IndexedFastaSequenceFile;
 import net.sf.picard.reference.FastaSequenceIndex;
+import net.sf.picard.reference.FastaSequenceIndexBuilder;
+import net.sf.picard.reference.IndexedFastaSequenceFile;
+import net.sf.picard.sam.CreateSequenceDictionary;
+import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
 import org.broadinstitute.sting.utils.exceptions.UserException;
+import org.broadinstitute.sting.utils.fasta.CachingIndexedFastaSequenceFile;
 import org.broadinstitute.sting.utils.file.FSLockWithShared;
 import org.broadinstitute.sting.utils.file.FileSystemInabilityToLockException;
-import org.broadinstitute.sting.utils.fasta.CachingIndexedFastaSequenceFile;
 
 import java.io.File;
 
@@ -42,7 +41,7 @@ import java.io.File;
  * Loads reference data from fasta file
  * Looks for fai and dict files, and tries to create them if they don't exist
  */
-public class ReferenceDataSource implements ReferenceDataSourceProgressListener {
+public class ReferenceDataSource {
     private IndexedFastaSequenceFile index;
 
     /** our log, which we want to capture anything from this class */
@@ -76,7 +75,7 @@ public class ReferenceDataSource implements ReferenceDataSourceProgressListener 
                 // get exclusive lock
                 if (!indexLock.exclusiveLock())
                     throw new UserException.CouldNotCreateReferenceIndexFileBecauseOfLock(dictFile);
-                FastaSequenceIndexBuilder faiBuilder = new FastaSequenceIndexBuilder(fastaFile, this);
+                FastaSequenceIndexBuilder faiBuilder = new FastaSequenceIndexBuilder(fastaFile, true);
                 FastaSequenceIndex sequenceIndex = faiBuilder.createIndex();
                 FastaSequenceIndexBuilder.saveAsFaiFile(sequenceIndex, indexFile);
             }
@@ -195,13 +194,4 @@ public class ReferenceDataSource implements ReferenceDataSourceProgressListener 
     public IndexedFastaSequenceFile getReference() {
         return this.index;
     }
-
-    /**
-     * Notify user of progress in creating fai file
-     * @param percent Percent of fasta file read as a percent
-     */
-    public void percentProgress(int percent) {
-        System.out.println(String.format("PROGRESS UPDATE: file is %d percent complete", percent));
-    }
-
 }

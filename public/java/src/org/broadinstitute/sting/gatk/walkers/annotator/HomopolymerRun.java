@@ -1,26 +1,29 @@
 package org.broadinstitute.sting.gatk.walkers.annotator;
 
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLineType;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFInfoHeaderLine;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
 import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
+import org.broadinstitute.sting.gatk.walkers.annotator.interfaces.AnnotatorCompatibleWalker;
 import org.broadinstitute.sting.gatk.walkers.annotator.interfaces.InfoFieldAnnotation;
 import org.broadinstitute.sting.gatk.walkers.annotator.interfaces.StandardAnnotation;
 import org.broadinstitute.sting.utils.GenomeLoc;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLineType;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFInfoHeaderLine;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
-import java.util.Map;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Arrays;
+import java.util.Map;
 
-
-public class HomopolymerRun implements InfoFieldAnnotation, StandardAnnotation {
+/**
+ * Largest contiguous homopolymer run of the variant allele in either direction on the reference.
+ */
+public class HomopolymerRun extends InfoFieldAnnotation implements StandardAnnotation {
 
     private boolean ANNOTATE_INDELS = true;
 
-    public Map<String, Object> annotate(RefMetaDataTracker tracker, ReferenceContext ref, Map<String, AlignmentContext> stratifiedContexts, VariantContext vc) {
+    public Map<String, Object> annotate(RefMetaDataTracker tracker, AnnotatorCompatibleWalker walker, ReferenceContext ref, Map<String, AlignmentContext> stratifiedContexts, VariantContext vc) {
 
         if ( !vc.isBiallelic() )
             return null;
@@ -78,7 +81,7 @@ public class HomopolymerRun implements InfoFieldAnnotation, StandardAnnotation {
         GenomeLoc locus = ref.getLocus();
         GenomeLoc window = ref.getWindow();
         int refBasePos = (int) (locus.getStart() - window.getStart())+1;
-        if ( vc.isDeletion() ) {
+        if ( vc.isSimpleDeletion() ) {
             // check that deleted bases are the same
             byte dBase = bases[refBasePos];
             for ( int i = 0; i < vc.getReference().length(); i ++ ) {

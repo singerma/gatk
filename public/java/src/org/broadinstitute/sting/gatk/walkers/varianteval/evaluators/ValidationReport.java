@@ -1,17 +1,17 @@
 package org.broadinstitute.sting.gatk.walkers.varianteval.evaluators;
 
-import org.broadinstitute.sting.utils.variantcontext.Allele;
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFConstants;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
-import org.broadinstitute.sting.utils.variantcontext.VariantContextUtils;
 import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
-import org.broadinstitute.sting.gatk.walkers.varianteval.tags.Analysis;
-import org.broadinstitute.sting.gatk.walkers.varianteval.tags.DataPoint;
+import org.broadinstitute.sting.gatk.walkers.varianteval.util.Analysis;
+import org.broadinstitute.sting.gatk.walkers.varianteval.util.DataPoint;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFConstants;
 import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
+import org.broadinstitute.sting.utils.variantcontext.Allele;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
-import java.util.*;
+import java.util.Collection;
+import java.util.Set;
 
 /**
  * The Broad Institute
@@ -118,7 +118,8 @@ public class ValidationReport extends VariantEvaluator implements StandardEval {
     public SiteStatus calcSiteStatus(VariantContext vc) {
         if ( vc == null ) return SiteStatus.NO_CALL;
         if ( vc.isFiltered() ) return SiteStatus.FILTERED;
-        if ( ! vc.isVariant() ) return SiteStatus.MONO;
+        if ( vc.isMonomorphic() ) return SiteStatus.MONO;
+        if ( vc.hasGenotypes() ) return SiteStatus.POLY;  // must be polymorphic if isMonomorphic was false and there are genotypes
 
         if ( vc.hasAttribute(VCFConstants.ALLELE_COUNT_KEY) ) {
             int ac = 0;
@@ -131,10 +132,8 @@ public class ValidationReport extends VariantEvaluator implements StandardEval {
 ////                System.out.printf("  ac = %d%n", ac);
             }
             else
-                ac = vc.getAttributeAsInt(VCFConstants.ALLELE_COUNT_KEY);
+                ac = vc.getAttributeAsInt(VCFConstants.ALLELE_COUNT_KEY, 0);
             return ac > 0 ? SiteStatus.POLY : SiteStatus.MONO;
-        } else if ( vc.hasGenotypes() ) {
-            return vc.isPolymorphic() ? SiteStatus.POLY : SiteStatus.MONO;
         } else {
             return TREAT_ALL_SITES_IN_EVAL_VCF_AS_CALLED ? SiteStatus.POLY : SiteStatus.NO_CALL; // we can't figure out what to do
             //return SiteStatus.NO_CALL; // we can't figure out what to do
@@ -144,8 +143,8 @@ public class ValidationReport extends VariantEvaluator implements StandardEval {
 
 
     public boolean haveDifferentAltAlleles(VariantContext eval, VariantContext comp) {
-        Set<Allele> evalAlts = eval.getAlternateAlleles();
-        Set<Allele> compAlts = comp.getAlternateAlleles();
+        Collection<Allele> evalAlts = eval.getAlternateAlleles();
+        Collection<Allele> compAlts = comp.getAlternateAlleles();
         if ( evalAlts.size() != compAlts.size() ) {
             return true;
         } else {

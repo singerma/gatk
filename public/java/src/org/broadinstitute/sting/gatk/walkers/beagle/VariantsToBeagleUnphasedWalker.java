@@ -25,37 +25,38 @@
 
 package org.broadinstitute.sting.gatk.walkers.beagle;
 
-import org.broadinstitute.sting.utils.variantcontext.Allele;
-import org.broadinstitute.sting.utils.variantcontext.Genotype;
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFHeader;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLine;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFWriter;
 import org.broadinstitute.sting.commandline.Argument;
+import org.broadinstitute.sting.commandline.Input;
 import org.broadinstitute.sting.commandline.Output;
+import org.broadinstitute.sting.commandline.RodBinding;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
-import org.broadinstitute.sting.utils.variantcontext.VariantContextUtils;
 import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
-import org.broadinstitute.sting.gatk.walkers.RMD;
-import org.broadinstitute.sting.gatk.walkers.Requires;
 import org.broadinstitute.sting.gatk.walkers.RodWalker;
 import org.broadinstitute.sting.utils.GenomeLoc;
 import org.broadinstitute.sting.utils.SampleUtils;
-import org.broadinstitute.sting.utils.exceptions.UserException;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFHeader;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLine;
 import org.broadinstitute.sting.utils.codecs.vcf.VCFUtils;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFWriter;
+import org.broadinstitute.sting.utils.exceptions.UserException;
+import org.broadinstitute.sting.utils.variantcontext.Allele;
+import org.broadinstitute.sting.utils.variantcontext.Genotype;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
+import org.broadinstitute.sting.utils.variantcontext.VariantContextUtils;
 
 import java.io.PrintStream;
-import java.util.*;
+import java.util.Arrays;
+import java.util.Set;
 
 /**
  * Produces an input file to Beagle imputation engine, listing unphased, hard-called genotypes for a single sample
  * in input variant file.  Will additional hold back a fraction of the sites for evaluation, marking the
  * genotypes at that sites as missing, and writing the truth of these sites to a second VCF file
  */
-@Requires(value={},referenceMetaData=@RMD(name= VariantsToBeagleUnphasedWalker.ROD_NAME, type=VariantContext.class))
 public class VariantsToBeagleUnphasedWalker extends RodWalker<Integer, Integer> {
-    public static final String ROD_NAME = "variant";
+    @Input(fullName="variants", shortName = "V", doc="Input VCF file", required=true)
+    public RodBinding<VariantContext> variants;
 
     @Output(doc="File to which BEAGLE unphased genotypes should be written",required=true)
     protected PrintStream  beagleWriter = null;
@@ -74,7 +75,7 @@ public class VariantsToBeagleUnphasedWalker extends RodWalker<Integer, Integer> 
     private int testSetSize = 0;
 
     public void initialize() {
-        samples = SampleUtils.getSampleListWithVCFHeader(getToolkit(), Arrays.asList(ROD_NAME));
+        samples = SampleUtils.getSampleListWithVCFHeader(getToolkit(), Arrays.asList(variants.getName()));
 
         beagleWriter.print("I marker alleleA alleleB");
         for ( String sample : samples )
@@ -101,7 +102,7 @@ public class VariantsToBeagleUnphasedWalker extends RodWalker<Integer, Integer> 
     public Integer map( RefMetaDataTracker tracker, ReferenceContext ref, AlignmentContext context ) {
         if( tracker != null ) {
             GenomeLoc loc = context.getLocation();
-            VariantContext vc = tracker.getVariantContext(ref, ROD_NAME, null, loc, true);
+            VariantContext vc = tracker.getFirstValue(variants, loc);
 
             if ( ProduceBeagleInputWalker.canBeOutputToBeagle(vc) ) {
                 // do we want to hold back this site?
@@ -109,7 +110,7 @@ public class VariantsToBeagleUnphasedWalker extends RodWalker<Integer, Integer> 
 
                 // if we are holding it back and we are writing a bootstrap VCF, write it out
                 if ( makeMissing && bootstrapVCFOutput != null ) {
-                    bootstrapVCFOutput.add(vc, ref.getBase());
+                    bootstrapVCFOutput.add(vc);
                 }
 
                 // regardless, all sites are written to the unphased genotypes file, marked as missing if appropriate

@@ -1,6 +1,32 @@
+/*
+ * Copyright (c) 2011 The Broad Institute
+ *
+ * Permission is hereby granted, free of charge, to any person
+ * obtaining a copy of this software and associated documentation
+ * files (the "Software"), to deal in the Software without
+ * restriction, including without limitation the rights to use,
+ * copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following
+ * conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+ * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+ * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR
+ * THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 package org.broadinstitute.sting.gatk.walkers.variantrecalibration;
 
 import org.apache.log4j.Logger;
+import org.broadinstitute.sting.gatk.GenomeAnalysisEngine;
 import org.broadinstitute.sting.utils.exceptions.UserException;
 
 import java.util.List;
@@ -18,6 +44,7 @@ public class VariantRecalibratorEngine {
     /////////////////////////////
 
     protected final static Logger logger = Logger.getLogger(VariantRecalibratorEngine.class);
+    public final static double MIN_ACCEPTABLE_LOD_SCORE = -20000.0;
 
     // the unified argument collection
     final private VariantRecalibratorArgumentCollection VRAC;
@@ -47,15 +74,33 @@ public class VariantRecalibratorEngine {
         for( final VariantDatum datum : data ) {
             final double thisLod = evaluateDatum( datum, model );
             if( Double.isNaN(thisLod) ) {
-                if( evaluateContrastively ) {
-                    throw new UserException("NaN LOD value assigned. Clustering with this few variants and these annotations is unsafe. Please consider raising the number of variants used to train the negative model (via --percentBadVariants 0.05, for example) or lowering the maximum number of Gaussians to use in the model (via --maxGaussians 4, for example)");
-                } else {
-                    throw new UserException("NaN LOD value assigned. Clustering with this few variants and these annotations is unsafe.");
-                }
+                throw new UserException("NaN LOD value assigned. Clustering with this few variants and these annotations is unsafe. Please consider raising the number of variants used to train the negative model (via --percentBadVariants 0.05, for example) or lowering the maximum number of Gaussians to use in the model (via --maxGaussians 4, for example)");
             }
-            datum.lod = ( evaluateContrastively ? (datum.prior + datum.lod - thisLod) : thisLod );
+
+            datum.lod = ( evaluateContrastively ?
+                            ( Double.isInfinite(datum.lod) ? // positive model said negative infinity
+                                    ( MIN_ACCEPTABLE_LOD_SCORE + GenomeAnalysisEngine.getRandomGenerator().nextDouble() * MIN_ACCEPTABLE_LOD_SCORE ) // Negative infinity lod values are possible when covariates are extremely far away from their tight Gaussians
+                                    : datum.prior + datum.lod - thisLod) // contrastive evaluation: (prior + positive model - negative model)
+                            : thisLod ); // positive model only so set the lod and return
         }
     }
+
+    public void calculateWorstPerformingAnnotation( final List<VariantDatum> data, final GaussianMixtureModel goodModel, final GaussianMixtureModel badModel ) {
+        for( final VariantDatum datum : data ) {
+            int worstAnnotation = -1;
+            double minProb = Double.MAX_VALUE;
+            for( int iii = 0; iii < datum.annotations.length; iii++ ) {
+                final Double goodProbLog10 = goodModel.evaluateDatumInOneDimension(datum, iii);
+                final Double badProbLog10 = badModel.evaluateDatumInOneDimension(datum, iii);
+                if( goodProbLog10 != null && badProbLog10 != null ) {
+                    final double prob = goodProbLog10 - badProbLog10;
+                    if(prob < minProb) { minProb = prob; worstAnnotation = iii; }
+                }
+            }
+            datum.worstAnnotation = worstAnnotation;
+        }
+    }
+
 
     /////////////////////////////
     // Private Methods used for generating a GaussianMixtureModel

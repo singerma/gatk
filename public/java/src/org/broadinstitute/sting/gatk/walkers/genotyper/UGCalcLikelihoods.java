@@ -25,8 +25,6 @@
 
 package org.broadinstitute.sting.gatk.walkers.genotyper;
 
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
-import org.broadinstitute.sting.utils.codecs.vcf.*;
 import org.broadinstitute.sting.commandline.ArgumentCollection;
 import org.broadinstitute.sting.commandline.Output;
 import org.broadinstitute.sting.gatk.DownsampleType;
@@ -36,8 +34,12 @@ import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
 import org.broadinstitute.sting.gatk.walkers.*;
 import org.broadinstitute.sting.utils.SampleUtils;
 import org.broadinstitute.sting.utils.baq.BAQ;
+import org.broadinstitute.sting.utils.codecs.vcf.*;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
-import java.util.*;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.TreeSet;
 
 
 /**
@@ -47,7 +49,6 @@ import java.util.*;
  * the name 'allele' so we know which alternate allele to use at each site.
  */
 @BAQMode(QualityMode = BAQ.QualityMode.ADD_TAG, ApplicationTime = BAQ.ApplicationTime.ON_INPUT)
-@Requires(value={},referenceMetaData=@RMD(name="alleles", type= VariantContext.class))
 @Reference(window=@Window(start=-200,stop=200))
 @By(DataSource.READS)
 @Downsample(by=DownsampleType.BY_SAMPLE, toCoverage=250)
@@ -91,7 +92,7 @@ public class UGCalcLikelihoods extends LocusWalker<VariantCallContext, Integer> 
 
     public VariantCallContext map(RefMetaDataTracker tracker, ReferenceContext refContext, AlignmentContext rawContext) {
         VariantContext call = UG_engine.calculateLikelihoods(tracker, refContext, rawContext);
-        return call == null ? null : new VariantCallContext(call, refContext.getBase(), true);
+        return call == null ? null : new VariantCallContext(call, true);
     }
 
     public Integer reduceInit() { return 0; }
@@ -105,7 +106,7 @@ public class UGCalcLikelihoods extends LocusWalker<VariantCallContext, Integer> 
             return sum;
 
         try {
-            writer.add(value, value.refBase);
+            writer.add(value);
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException(e.getMessage() + "; this is often caused by using the --assume_single_sample_reads argument with the wrong sample name");
         }

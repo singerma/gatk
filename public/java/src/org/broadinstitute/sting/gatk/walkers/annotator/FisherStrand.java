@@ -24,29 +24,35 @@
 
 package org.broadinstitute.sting.gatk.walkers.annotator;
 
+import cern.jet.math.Arithmetic;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
+import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
+import org.broadinstitute.sting.gatk.walkers.annotator.interfaces.AnnotatorCompatibleWalker;
 import org.broadinstitute.sting.gatk.walkers.annotator.interfaces.InfoFieldAnnotation;
 import org.broadinstitute.sting.gatk.walkers.annotator.interfaces.StandardAnnotation;
-import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
 import org.broadinstitute.sting.gatk.walkers.genotyper.IndelGenotypeLikelihoodsCalculationModel;
-import org.broadinstitute.sting.utils.*;
-import org.broadinstitute.sting.utils.pileup.PileupElement;
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
-import org.broadinstitute.sting.utils.variantcontext.Allele;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFInfoHeaderLine;
+import org.broadinstitute.sting.utils.QualityUtils;
 import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLineType;
-import cern.jet.math.Arithmetic;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFInfoHeaderLine;
+import org.broadinstitute.sting.utils.pileup.PileupElement;
 import org.broadinstitute.sting.utils.pileup.ReadBackedPileup;
+import org.broadinstitute.sting.utils.variantcontext.Allele;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
 import java.util.*;
 
 
-public class FisherStrand implements InfoFieldAnnotation, StandardAnnotation {
+/**
+ * Phred-scaled p-value using Fisher's Exact Test to detect strand bias (the variation
+ * being seen on only the forward or only the reverse strand) in the reads? More bias is
+ * indicative of false positive calls.
+ */
+public class FisherStrand extends InfoFieldAnnotation implements StandardAnnotation {
     private static final String FS = "FS";
     private static final double MIN_PVALUE = 1E-320;
 
-    public Map<String, Object> annotate(RefMetaDataTracker tracker, ReferenceContext ref, Map<String, AlignmentContext> stratifiedContexts, VariantContext vc) {
+    public Map<String, Object> annotate(RefMetaDataTracker tracker, AnnotatorCompatibleWalker walker, ReferenceContext ref, Map<String, AlignmentContext> stratifiedContexts, VariantContext vc) {
         if ( ! vc.isVariant() || vc.isFiltered() )
             return null;
 
@@ -199,7 +205,7 @@ public class FisherStrand implements InfoFieldAnnotation, StandardAnnotation {
 
         for ( Map.Entry<String, AlignmentContext> sample : stratifiedContexts.entrySet() ) {
             for (PileupElement p : sample.getValue().getBasePileup()) {
-                if ( p.isDeletion() ) // ignore deletions
+                if ( p.isDeletion() || p.isReducedRead() ) // ignore deletions and reduced reads
                     continue;
 
                 if ( p.getRead().getMappingQuality() < 20 || p.getQual() < 20 )
@@ -252,6 +258,8 @@ public class FisherStrand implements InfoFieldAnnotation, StandardAnnotation {
                  continue;
 
             for (final PileupElement p: pileup) {
+                if ( p.isReducedRead() ) // ignore reduced reads
+                    continue;
                 if ( p.getRead().getMappingQuality() < 20)
                     continue;
                 if (indelLikelihoodMap.containsKey(p)) {

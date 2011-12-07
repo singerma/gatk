@@ -11,20 +11,16 @@ import org.testng.annotations.Test;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.BeforeMethod;
 import org.broadinstitute.sting.BaseTest;
-import org.broadinstitute.sting.gatk.walkers.qc.ValidateBAQWalker;
-import org.broadinstitute.sting.utils.fasta.CachingIndexedFastaSequenceFile;
-import org.broadinstitute.sting.utils.sam.ArtificialSAMFileWriter;
 import org.broadinstitute.sting.utils.sam.ArtificialSAMUtils;
 import org.broadinstitute.sting.utils.Utils;
 
 import java.io.File;
 import java.io.FileNotFoundException;
-import java.util.Arrays;
+import java.io.PrintStream;
 import java.util.List;
 import java.util.ArrayList;
 
 import net.sf.picard.reference.IndexedFastaSequenceFile;
-import net.sf.picard.reference.ReferenceSequence;
 import net.sf.samtools.*;
 
 /**
@@ -176,6 +172,17 @@ public class BAQUnitTest extends BaseTest {
         }
     }
 
+    @Test(enabled = true)
+    public void testBAQQualRange() {
+        BAQ baq = new BAQ(1e-3, 0.1, 7, (byte)4, false);         // matches current samtools parameters
+        final byte ref = (byte)'A';
+        final byte alt = (byte)'A';
+
+        for ( int i = 0; i <= SAMUtils.MAX_PHRED_SCORE; i++ )
+            Assert.assertTrue(baq.calcEpsilon( ref, alt, (byte)i) >= 0.0, "Failed to get baq epsilon range");
+    }
+
+
     public void testBAQ(BAQTest test, boolean lookupWithFasta) {
         BAQ baqHMM = new BAQ(1e-3, 0.1, 7, (byte)4, false);         // matches current samtools parameters
 
@@ -188,13 +195,25 @@ public class BAQUnitTest extends BaseTest {
 
         System.out.println(Utils.dupString('-', 40));
         System.out.println("reads   : " + new String(test.readBases));
-        ValidateBAQWalker.printQuals(System.out, "in-quals:", test.quals, false);
-        ValidateBAQWalker.printQuals(System.out, "bq-quals:", result.bq, false);
+        printQuals(System.out, "in-quals:", test.quals, false);
+        printQuals(System.out, "bq-quals:", result.bq, false);
         for (int i = 0; i < test.quals.length; i++) {
             //result.bq[i] = baqHMM.capBaseByBAQ(result.rawQuals[i], result.bq[i], result.state[i], i);
             Assert.assertTrue(result.bq[i] >= baqHMM.getMinBaseQual() || test.expected[i] < baqHMM.getMinBaseQual(), "BQ < min base quality");
             Assert.assertEquals(result.bq[i], test.expected[i], "Did not see the expected BAQ value at " + i);
         }
 
+    }
+
+    public final static void printQuals( PrintStream out, String prefix, byte[] quals, boolean asInt ) {
+        out.print(prefix);
+        for ( int i = 0; i < quals.length; i++) {
+            if ( asInt ) {
+                out.printf("%2d", (int)quals[i]);
+                if ( i+1 != quals.length ) out.print(",");
+            } else
+                out.print((char)(quals[i]+33));
+        }
+        out.println();
     }
 }

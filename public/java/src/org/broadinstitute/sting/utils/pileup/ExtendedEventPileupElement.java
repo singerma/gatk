@@ -1,9 +1,7 @@
 package org.broadinstitute.sting.utils.pileup;
 
-import org.broadinstitute.sting.utils.GenomeLoc;
-import org.broadinstitute.sting.utils.GenomeLocParser;
-import org.broadinstitute.sting.utils.BaseUtils;
 import net.sf.samtools.SAMRecord;
+import org.broadinstitute.sting.utils.sam.GATKSAMRecord;
 
 import java.util.Arrays;
 
@@ -53,7 +51,7 @@ public class ExtendedEventPileupElement extends PileupElement {
      * @param length length of the indel (number of inserted or deleted bases); length <=0 indicates that the read has no indel (NOEVENT)
      * @param eventBases inserted bases. null indicates that the event is a deletion; ignored if length<=0 (noevent)
      */
-    public ExtendedEventPileupElement( SAMRecord read, int offset, int length, byte[] eventBases ) {
+    public ExtendedEventPileupElement( GATKSAMRecord read, int offset, int length, byte[] eventBases ) {
         super(read, offset);
         this.eventLength = length;
         if ( length <= 0 ) type = Type.NOEVENT;
@@ -73,7 +71,7 @@ public class ExtendedEventPileupElement extends PileupElement {
      * @param offset
      * @param length
      */
-    public ExtendedEventPileupElement( SAMRecord read, int offset, int length ) {
+    public ExtendedEventPileupElement( GATKSAMRecord read, int offset, int length ) {
         this(read,offset, length, null);
     }
 

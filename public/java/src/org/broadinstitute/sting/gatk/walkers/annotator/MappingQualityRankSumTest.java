@@ -1,18 +1,22 @@
 package org.broadinstitute.sting.gatk.walkers.annotator;
 
-import org.broadinstitute.sting.utils.variantcontext.Allele;
+import org.broadinstitute.sting.gatk.walkers.genotyper.IndelGenotypeLikelihoodsCalculationModel;
+import org.broadinstitute.sting.utils.QualityUtils;
 import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLineType;
 import org.broadinstitute.sting.utils.codecs.vcf.VCFInfoHeaderLine;
-import org.broadinstitute.sting.gatk.walkers.genotyper.IndelGenotypeLikelihoodsCalculationModel;
-import org.broadinstitute.sting.utils.pileup.ReadBackedPileup;
 import org.broadinstitute.sting.utils.pileup.PileupElement;
+import org.broadinstitute.sting.utils.pileup.ReadBackedPileup;
+import org.broadinstitute.sting.utils.variantcontext.Allele;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Arrays;
 
 
+/**
+ * The phred-scaled p-value (u-based z-approximation) from the Mann-Whitney Rank Sum Test for mapping qualities (reads with ref bases vs. those with the alternate allele)
+ */
 public class MappingQualityRankSumTest extends RankSumTest {
 
     public List<String> getKeyNames() { return Arrays.asList("MQRankSum"); }
@@ -21,7 +25,7 @@ public class MappingQualityRankSumTest extends RankSumTest {
 
     protected void fillQualsFromPileup(byte ref, byte alt, ReadBackedPileup pileup, List<Double> refQuals, List<Double> altQuals) {
         for ( final PileupElement p : pileup ) {
-            if( isUsableBase(p) && p.getMappingQual() < 254 ) { // 254 and 255 are special mapping qualities used as a code by aligners
+            if ( isUsableBase(p) ) {
                 if ( p.getBase() == ref ) {
                     refQuals.add((double)p.getMappingQual());
                 } else if ( p.getBase() == alt ) {
@@ -34,7 +38,7 @@ public class MappingQualityRankSumTest extends RankSumTest {
         // equivalent is whether indel likelihoods for reads corresponding to ref allele are more likely than reads corresponding to alt allele ?
         HashMap<PileupElement,LinkedHashMap<Allele,Double>> indelLikelihoodMap = IndelGenotypeLikelihoodsCalculationModel.getIndelLikelihoodMap();
         for (final PileupElement p: pileup) {
-            if (indelLikelihoodMap.containsKey(p) && p.getMappingQual() < 254) {
+            if (indelLikelihoodMap.containsKey(p) && p.getMappingQual() != 0 && p.getMappingQual() != QualityUtils.MAPPING_QUALITY_UNAVAILABLE) {
                 // retrieve likelihood information corresponding to this read
                 LinkedHashMap<Allele,Double> el = indelLikelihoodMap.get(p);
                 // by design, first element in LinkedHashMap was ref allele
@@ -54,8 +58,6 @@ public class MappingQualityRankSumTest extends RankSumTest {
                     refQuals.add((double)p.getMappingQual());
                 else if (altLikelihood > refLikelihood + INDEL_LIKELIHOOD_THRESH)
                     altQuals.add((double)p.getMappingQual());
-
-
             }
         }
     }

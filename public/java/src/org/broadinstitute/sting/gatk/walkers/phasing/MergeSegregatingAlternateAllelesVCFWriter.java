@@ -24,20 +24,19 @@
 
 package org.broadinstitute.sting.gatk.walkers.phasing;
 
-import net.sf.picard.reference.IndexedFastaSequenceFile;
 import net.sf.picard.reference.ReferenceSequenceFile;
 import org.apache.log4j.Logger;
+import org.broadinstitute.sting.utils.GenomeLocParser;
+import org.broadinstitute.sting.utils.MathUtils;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFHeader;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFWriter;
+import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
+import org.broadinstitute.sting.utils.exceptions.UserException;
+import org.broadinstitute.sting.utils.fasta.CachingIndexedFastaSequenceFile;
 import org.broadinstitute.sting.utils.variantcontext.Allele;
 import org.broadinstitute.sting.utils.variantcontext.Genotype;
 import org.broadinstitute.sting.utils.variantcontext.VariantContext;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFHeader;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFWriter;
 import org.broadinstitute.sting.utils.variantcontext.VariantContextUtils;
-import org.broadinstitute.sting.utils.GenomeLocParser;
-import org.broadinstitute.sting.utils.MathUtils;
-import org.broadinstitute.sting.utils.exceptions.UserException;
-import org.broadinstitute.sting.utils.fasta.CachingIndexedFastaSequenceFile;
-import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -119,7 +118,7 @@ public class MergeSegregatingAlternateAllelesVCFWriter implements VCFWriter {
             innerWriter.close();
     }
 
-    public void add(VariantContext vc, byte refBase) {
+    public void add(VariantContext vc) {
         if (useSingleSample != null) { // only want to output context for one sample
             Genotype sampGt = vc.getGenotype(useSingleSample);
             if (sampGt != null) // TODO: subContextFromGenotypes() does not handle any INFO fields [AB, HaplotypeScore, MQ, etc.].  Note that even SelectVariants.subsetRecord() only handles AC,AN,AF, and DP!
@@ -139,11 +138,11 @@ public class MergeSegregatingAlternateAllelesVCFWriter implements VCFWriter {
 
             if (curVcIsNotFiltered) { // still need to wait before can release vc
                 logger.debug("Waiting for new variant " + VariantContextUtils.getLocation(genomeLocParser, vc));
-                vcfrWaitingToMerge = new VCFRecord(vc, refBase, false);
+                vcfrWaitingToMerge = new VCFRecord(vc, false);
             }
             else if (!emitOnlyMergedRecords) { // filtered records are never merged
                 logger.debug("DIRECTLY output " + VariantContextUtils.getLocation(genomeLocParser, vc));
-                innerWriter.add(vc, refBase);
+                innerWriter.add(vc);
             }
         }
         else { // waiting to merge vcfrWaitingToMerge
@@ -152,7 +151,7 @@ public class MergeSegregatingAlternateAllelesVCFWriter implements VCFWriter {
             if (!curVcIsNotFiltered) {
                 if (!emitOnlyMergedRecords) { // filtered records are never merged
                     logger.debug("Caching unprocessed output " + VariantContextUtils.getLocation(genomeLocParser, vc));
-                    filteredVcfrList.add(new VCFRecord(vc, refBase, false));
+                    filteredVcfrList.add(new VCFRecord(vc, false));
                 }
             }
             else { // waiting to merge vcfrWaitingToMerge, and curVcIsNotFiltered. So, attempt to merge them:
@@ -189,14 +188,14 @@ public class MergeSegregatingAlternateAllelesVCFWriter implements VCFWriter {
                         addedAttribs.putAll(mergedVc.getAttributes());
                         mergedVc = VariantContext.modifyAttributes(mergedVc, addedAttribs);
 
-                        vcfrWaitingToMerge = new VCFRecord(mergedVc, vcfrWaitingToMerge.refBase, true);
+                        vcfrWaitingToMerge = new VCFRecord(mergedVc, true);
                         numMergedRecords++;
                     }
                 }
 
                 if (!mergedRecords) {
                     stopWaitingToMerge();
-                    vcfrWaitingToMerge = new VCFRecord(vc, refBase, false);
+                    vcfrWaitingToMerge = new VCFRecord(vc, false);
                 }
                 logger.debug("Merged? = " + mergedRecords);
             }
@@ -211,11 +210,11 @@ public class MergeSegregatingAlternateAllelesVCFWriter implements VCFWriter {
         }
 
         if (!emitOnlyMergedRecords || vcfrWaitingToMerge.resultedFromMerge)
-            innerWriter.add(vcfrWaitingToMerge.vc, vcfrWaitingToMerge.refBase);
+            innerWriter.add(vcfrWaitingToMerge.vc);
         vcfrWaitingToMerge = null;
 
         for (VCFRecord vcfr : filteredVcfrList)
-            innerWriter.add(vcfr.vc, vcfr.refBase);
+            innerWriter.add(vcfr.vc);
         filteredVcfrList.clear();
     }
 
@@ -258,12 +257,10 @@ public class MergeSegregatingAlternateAllelesVCFWriter implements VCFWriter {
 
     private static class VCFRecord {
         public VariantContext vc;
-        public byte refBase;
         public boolean resultedFromMerge;
 
-        public VCFRecord(VariantContext vc, byte refBase, boolean resultedFromMerge) {
+        public VCFRecord(VariantContext vc, boolean resultedFromMerge) {
             this.vc = vc;
-            this.refBase = refBase;
             this.resultedFromMerge = resultedFromMerge;
         }
     }

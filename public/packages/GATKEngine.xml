@@ -26,24 +26,24 @@
 <package name="GATKEngine">
   <executable name="GATKEngine">
     <dependencies>
-      <!-- Core walkers -->
-      <package name="org.broadinstitute.sting.gatk.walkers.**" />
-      <!-- All non-oneoff GATK-specific RODs -->
-      <package name="org.broadinstitute.sting.gatk.refdata.**" />
-      <!-- Filters -->
-      <package name="org.broadinstitute.sting.gatk.filters" />
+      <!-- Package everything in org.broadinstitute.sting -->
+      <package name="org.broadinstitute.sting.**" />
       <!-- Tribble codecs -->
-      <package name="org.broad.tribble.*" />
+      <package name="org.broad.tribble.**" />
       <!-- Workaround - depend on the logger impl required by JEXL -->
       <package name="org.apache.commons.logging.impl" />
+      <!-- R packages -->
+      <dir name="org/broadinstitute/sting/utils/R" includes="**/*.tar.gz" />
+      <!-- All R scripts in org.broadinstitute.sting -->
+      <dir name="org/broadinstitute/sting" includes="**/*.R" />
     </dependencies>
   </executable>
   <resources>
     <!-- Sample reads and reference files -->
-    <file name="testdata/exampleBAM.bam" />
-    <file name="testdata/exampleBAM.bam.bai" />
-    <file name="testdata/exampleFASTA.fasta" />
-    <file name="testdata/exampleFASTA.fasta.fai" />
-    <file name="testdata/exampleFASTA.dict" />
+    <file name="public/testdata/exampleBAM.bam" />
+    <file name="public/testdata/exampleBAM.bam.bai" />
+    <file name="public/testdata/exampleFASTA.fasta" />
+    <file name="public/testdata/exampleFASTA.fasta.fai" />
+    <file name="public/testdata/exampleFASTA.dict" />
   </resources>
 </package>

@@ -28,9 +28,9 @@ import net.sf.samtools.SAMFileHeader;
 import net.sf.samtools.SAMRecord;
 import net.sf.samtools.SAMSequenceDictionary;
 import net.sf.samtools.SAMSequenceRecord;
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
-import org.broadinstitute.sting.utils.variantcontext.VariantContextUtils;
 import org.broadinstitute.sting.utils.GenomeLoc;
+import org.broadinstitute.sting.utils.help.DocumentedGATKFeature;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
 import java.io.File;
 import java.util.Arrays;
@@ -44,6 +44,9 @@ import java.util.Arrays;
  * Date: Sep 3, 2010
  * Time: 2:24:09 PM
  */
+@DocumentedGATKFeature(
+        groupName = "User exceptions",
+        summary = "Exceptions caused by incorrect user behavior, such as bad files, bad arguments, etc." )
 public class UserException extends ReviewedStingException {
     public UserException(String msg) { super(msg); }
     public UserException(String msg, Throwable e) { super(msg, e); }
@@ -84,6 +87,13 @@ public class UserException extends ReviewedStingException {
         }
     }
 
+    public static class UnknownTribbleType extends CommandLineException {
+        public UnknownTribbleType(String type, String message) {
+            super(String.format("Unknown tribble type %s: %s", type, message));
+        }
+    }
+
+
     public static class BadTmpDir extends UserException {
         public BadTmpDir(String message) {
             super(String.format("Failure working with the tmp directory %s. Override with -Djava.io.tmpdir=X on the command line to a bigger/better file system.  Exact error was %s", System.getProperties().get("java.io.tmpdir"), message));
@@ -99,6 +109,10 @@ public class UserException extends ReviewedStingException {
     public static class CouldNotReadInputFile extends UserException {
         public CouldNotReadInputFile(String message, Exception e) {
             super(String.format("Couldn't read file because %s caused by %s", message, e.getMessage()));
+        }
+
+        public CouldNotReadInputFile(File file) {
+            super(String.format("Couldn't read file %s", file.getAbsolutePath()));
         }
 
         public CouldNotReadInputFile(File file, String message) {
@@ -150,7 +164,31 @@ public class UserException extends ReviewedStingException {
 
     public static class MalformedBAM extends UserException {
         public MalformedBAM(SAMRecord read, String message) {
-            super(String.format("SAM/BAM file %s is malformed: %s", read.getFileSource() != null ? read.getFileSource().getReader() : "(none)", message));
+            this(read.getFileSource() != null ? read.getFileSource().getReader().toString() : "(none)", message);
+        }
+
+        public MalformedBAM(File file, String message) {
+            this(file.toString(), message);
+        }
+
+        public MalformedBAM(String source, String message) {
+            super(String.format("SAM/BAM file %s is malformed: %s", source, message));
+        }
+    }
+
+    public static class MalformedVCF extends UserException {
+        public MalformedVCF(String message, String line) {
+            super(String.format("The provided VCF file is malformed at line %s: %s", line, message));
+        }
+
+        public MalformedVCF(String message, int lineNo) {
+            super(String.format("The provided VCF file is malformed at line number %d: %s", lineNo, message));
+        }
+    }
+
+    public static class MalformedVCFHeader extends UserException {
+        public MalformedVCFHeader(String message) {
+            super(String.format("The provided VCF file has a malformed header: %s", message));
         }
     }
 
@@ -189,12 +227,19 @@ public class UserException extends ReviewedStingException {
             super(String.format("File %s is malformed: %s caused by %s", f.getAbsolutePath(), message, e.getMessage()));
         }
 
+        public MalformedFile(String name, String message) {
+            super(String.format("File associated with name %s is malformed: %s", name, message));
+        }
+
         public MalformedFile(String name, String message, Exception e) {
             super(String.format("File associated with name %s is malformed: %s caused by %s", name, message, e.getMessage()));
         }
      }
 
     public static class CannotExecuteRScript extends UserException {
+        public CannotExecuteRScript(String message) {
+            super(String.format("Unable to execute RScript command: " + message));
+        }
         public CannotExecuteRScript(String message, Exception e) {
             super(String.format("Unable to execute RScript command: " + message), e);
         }

@@ -25,23 +25,23 @@
 
 package org.broadinstitute.sting.gatk.walkers.variantrecalibration;
 
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
-import org.broadinstitute.sting.commandline.Argument;
-import org.broadinstitute.sting.commandline.ArgumentCollection;
-import org.broadinstitute.sting.commandline.Hidden;
-import org.broadinstitute.sting.commandline.Output;
+import org.broadinstitute.sting.commandline.*;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
-import org.broadinstitute.sting.utils.variantcontext.VariantContextUtils;
-import org.broadinstitute.sting.gatk.datasources.rmd.ReferenceOrderedDataSource;
 import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
+import org.broadinstitute.sting.gatk.walkers.PartitionBy;
+import org.broadinstitute.sting.gatk.walkers.PartitionType;
 import org.broadinstitute.sting.gatk.walkers.RodWalker;
 import org.broadinstitute.sting.gatk.walkers.TreeReducible;
 import org.broadinstitute.sting.utils.MathUtils;
 import org.broadinstitute.sting.utils.QualityUtils;
+import org.broadinstitute.sting.utils.R.RScriptExecutor;
 import org.broadinstitute.sting.utils.Utils;
 import org.broadinstitute.sting.utils.collections.ExpandingArrayList;
 import org.broadinstitute.sting.utils.exceptions.UserException;
+import org.broadinstitute.sting.utils.io.Resource;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
+import org.broadinstitute.sting.utils.variantcontext.VariantContextUtils;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -49,19 +49,88 @@ import java.io.PrintStream;
 import java.util.*;
 
 /**
- * Takes variant calls as .vcf files, learns a Gaussian mixture model over the variant annotations and evaluates the variant -- assigning an informative lod score
+ * Create a Gaussian mixture model by looking at the annotations values over a high quality subset of the input call set and then evaluate all input variants.
  *
- * User: rpoplin
- * Date: 3/12/11
+ * <p>
+ * This walker is the first pass in a two-stage processing step. This walker is designed to be used in conjunction with ApplyRecalibration walker.
  *
- * @help.summary Takes variant calls as .vcf files, learns a Gaussian mixture model over the variant annotations and evaluates the variant -- assigning an informative lod score
+ * <p>
+ * The purpose of the variant recalibrator is to assign a well-calibrated probability to each variant call in a call set.
+ * One can then create highly accurate call sets by filtering based on this single estimate for the accuracy of each call.
+ * The approach taken by variant quality score recalibration is to develop a continuous, covarying estimate of the relationship
+ * between SNP call annotations (QD, SB, HaplotypeScore, HRun, for example) and the the probability that a SNP is a true genetic
+ * variant versus a sequencing or data processing artifact. This model is determined adaptively based on "true sites" provided
+ * as input, typically HapMap 3 sites and those sites found to be polymorphic on the Omni 2.5M SNP chip array. This adaptive
+ * error model can then be applied to both known and novel variation discovered in the call set of interest to evaluate the
+ * probability that each call is real. The score that gets added to the INFO field of each variant is called the VQSLOD. It is
+ * the log odds ratio of being a true variant versus being false under the trained Gaussian mixture model.
+ *
+ * <p>
+ * NOTE: Please see our <a href="http://www.broadinstitute.org/gsa/wiki/index.php/Best_Practice_Variant_Detection_with_the_GATK_v3">best practices wiki page</a> for our recommendations on which annotations to use for specific project designs.
+ *
+ * <p>
+ * NOTE: In order to create the model reporting plots Rscript needs to be in your environment PATH (this is the scripting version of R, not the interactive version).
+ * See <a target="r-project" href="http://www.r-project.org">http://www.r-project.org</a> for more info on how to download and install R.
+ *
+ * <p>
+ * See <a href="http://www.broadinstitute.org/gsa/wiki/index.php/Variant_quality_score_recalibration">the GATK wiki for a tutorial and example recalibration accuracy plots.</a>
+ *
+ * <h2>Input</h2>
+ * <p>
+ * The input raw variants to be recalibrated.
+ * <p>
+ * Known, truth, and training sets to be used by the algorithm. How these various sets are used is described below.
+ *
+ * <h2>Output</h2>
+ * <p>
+ * A recalibration table file in CSV format that is used by the ApplyRecalibration walker.
+ * <p>
+ * A tranches file which shows various metrics of the recalibration callset as a function of making several slices through the data.
+ *
+ * <h2>Example</h2>
+ * <pre>
+ * java -Xmx4g -jar GenomeAnalysisTK.jar \
+ *   -T VariantRecalibrator \
+ *   -R reference/human_g1k_v37.fasta \
+ *   -input NA12878.HiSeq.WGS.bwa.cleaned.raw.subset.b37.vcf \
+ *   -resource:hapmap,known=false,training=true,truth=true,prior=15.0 hapmap_3.3.b37.sites.vcf \
+ *   -resource:omni,known=false,training=true,truth=false,prior=12.0 1000G_omni2.5.b37.sites.vcf \
+ *   -resource:dbsnp,known=true,training=false,truth=false,prior=8.0 dbsnp_132.b37.vcf \
+ *   -an QD -an HaplotypeScore -an MQRankSum -an ReadPosRankSum -an MQ \
+ *   -recalFile path/to/output.recal \
+ *   -tranchesFile path/to/output.tranches \
+ *   -rscriptFile path/to/output.plots.R
+ * </pre>
+ *
  */
 
+@PartitionBy(PartitionType.NONE)
 public class VariantRecalibrator extends RodWalker<ExpandingArrayList<VariantDatum>, ExpandingArrayList<VariantDatum>> implements TreeReducible<ExpandingArrayList<VariantDatum>> {
 
-    public static final String VQS_LOD_KEY = "VQSLOD";
+    public static final String VQS_LOD_KEY = "VQSLOD"; // Log odds ratio of being a true variant versus being false under the trained gaussian mixture model
+    public static final String CULPRIT_KEY = "culprit"; // The annotation which was the worst performing in the Gaussian mixture model, likely the reason why the variant was filtered out
+    private static final String PLOT_TRANCHES_RSCRIPT = "plot_Tranches.R";
 
     @ArgumentCollection private VariantRecalibratorArgumentCollection VRAC = new VariantRecalibratorArgumentCollection();
+
+    /////////////////////////////
+    // Inputs
+    /////////////////////////////
+    /**
+     * These calls should be unfiltered and annotated with the error covariates that are intended to use for modeling.
+     */
+    @Input(fullName="input", shortName = "input", doc="The raw input variants to be recalibrated", required=true)
+    public List<RodBinding<VariantContext>> input;
+
+    /**
+     * Any set of VCF files to use as lists of training, truth, or known sites.
+     * Training - Input variants which are found to overlap with these training sites are used to build the Gaussian mixture model.
+     * Truth - When deciding where to set the cutoff in VQSLOD sensitivity to these truth sites is used.
+     * Known - The known / novel status of a variant isn't used by the algorithm itself and is only used for reporting / display purposes.
+     * Bad - In addition to using the worst 3% of variants as compared to the Gaussian mixture model, we can also supplement the list with a database of known bad variants.
+     */
+    @Input(fullName="resource", shortName = "resource", doc="A list of sites for which to apply a prior probability of being correct but which aren't used by the algorithm", required=false)
+    public List<RodBinding<VariantContext>> resource = Collections.emptyList();
 
     /////////////////////////////
     // Outputs
@@ -74,21 +143,33 @@ public class VariantRecalibrator extends RodWalker<ExpandingArrayList<VariantDat
     /////////////////////////////
     // Additional Command Line Arguments
     /////////////////////////////
-    @Argument(fullName="target_titv", shortName="titv", doc="The expected novel Ti/Tv ratio to use when calculating FDR tranches and for display on optimization curve output figures. (approx 2.15 for whole genome experiments). ONLY USED FOR PLOTTING PURPOSES!", required=false)
+    /**
+     * The expected transition / tranversion ratio of true novel variants in your targeted region (whole genome, exome, specific
+     * genes), which varies greatly by the CpG and GC content of the region. See expected Ti/Tv ratios section of the GATK best
+     * practices wiki documentation for more information. Normal whole genome values are 2.15 and for whole exome 3.2. Note
+     * that this parameter is used for display purposes only and isn't used anywhere in the algorithm!
+     */
+    @Argument(fullName="target_titv", shortName="titv", doc="The expected novel Ti/Tv ratio to use when calculating FDR tranches and for display on the optimization curve output figures. (approx 2.15 for whole genome experiments). ONLY USED FOR PLOTTING PURPOSES!", required=false)
     private double TARGET_TITV = 2.15;
+
+    /**
+     * See the input VCF file's INFO field for a list of all available annotations.
+     */
     @Argument(fullName="use_annotation", shortName="an", doc="The names of the annotations which should used for calculations", required=true)
     private String[] USE_ANNOTATIONS = null;
+
+    /**
+     * Add truth sensitivity slices through the call set at the given values. The default values are 100.0, 99.9, 99.0, and 90.0
+     * which will result in 4 estimated tranches in the final call set: the full set of calls (100% sensitivity at the accessible
+     * sites in the truth set), a 99.9% truth sensitivity tranche, along with progressively smaller tranches at 99% and 90%.
+     */
     @Argument(fullName="TStranche", shortName="tranche", doc="The levels of novel false discovery rate (FDR, implied by ti/tv) at which to slice the data. (in percent, that is 1.0 for 1 percent)", required=false)
     private double[] TS_TRANCHES = new double[] {100.0, 99.9, 99.0, 90.0};
-    @Argument(fullName="ignore_filter", shortName="ignoreFilter", doc="If specified the optimizer will use variants even if the specified filter name is marked in the input VCF file", required=false)
+    @Argument(fullName="ignore_filter", shortName="ignoreFilter", doc="If specified the variant recalibrator will use variants even if the specified filter name is marked in the input VCF file", required=false)
     private String[] IGNORE_INPUT_FILTERS = null;
-    @Argument(fullName="path_to_Rscript", shortName = "Rscript", doc = "The path to your implementation of Rscript. For Broad users this is maybe /broad/tools/apps/R-2.6.0/bin/Rscript", required=false)
-    private String PATH_TO_RSCRIPT = "Rscript";
-    @Argument(fullName="rscript_file", shortName="rscriptFile", doc="The output rscript file generated by the VQSR to aid in visualization of the input data and learned model", required=false)
-    private String RSCRIPT_FILE = null;
-    @Argument(fullName = "path_to_resources", shortName = "resources", doc = "Path to resources folder holding the Sting R scripts.", required=false)
-    private String PATH_TO_RESOURCES = "R/";
-    @Argument(fullName="ts_filter_level", shortName="ts_filter_level", doc="The truth sensitivity level at which to start filtering, used here to indicate filtered variants in plots", required=false)
+    @Output(fullName="rscript_file", shortName="rscriptFile", doc="The output rscript file generated by the VQSR to aid in visualization of the input data and learned model", required=false)
+    private File RSCRIPT_FILE = null;
+    @Argument(fullName="ts_filter_level", shortName="ts_filter_level", doc="The truth sensitivity level at which to start filtering, used here to indicate filtered variants in the model reporting plots", required=false)
     private double TS_FILTER_LEVEL = 99.0;
 
     /////////////////////////////
@@ -97,9 +178,9 @@ public class VariantRecalibrator extends RodWalker<ExpandingArrayList<VariantDat
     @Hidden
     @Argument(fullName = "trustAllPolymorphic", shortName = "allPoly", doc = "Trust that all the input training sets' unfiltered records contain only polymorphic sites to drastically speed up the computation.", required = false)
     protected Boolean TRUST_ALL_POLYMORPHIC = false;
-    @Hidden
-    @Argument(fullName = "projectConsensus", shortName = "projectConsensus", doc = "Perform 1000G project consensus. This implies an extra prior factor based on the individual participant callsets passed in with consensus=true rod binding tags.", required = false)
-    protected Boolean PERFORM_PROJECT_CONSENSUS = false;
+    //@Hidden
+    //@Argument(fullName = "projectConsensus", shortName = "projectConsensus", doc = "Perform 1000G project consensus. This implies an extra prior factor based on the individual participant callsets passed in with consensus=true rod binding tags.", required = false)
+    //protected Boolean PERFORM_PROJECT_CONSENSUS = false;
 
     /////////////////////////////
     // Private Member Variables
@@ -107,7 +188,6 @@ public class VariantRecalibrator extends RodWalker<ExpandingArrayList<VariantDat
     private VariantDataManager dataManager;
     private PrintStream tranchesStream;
     private final Set<String> ignoreInputFilterSet = new TreeSet<String>();
-    private final Set<String> inputNames = new HashSet<String>();
     private final VariantRecalibratorEngine engine = new VariantRecalibratorEngine( VRAC );
 
     //---------------------------------------------------------------------------------------------------------------
@@ -119,17 +199,23 @@ public class VariantRecalibrator extends RodWalker<ExpandingArrayList<VariantDat
     public void initialize() {
         dataManager = new VariantDataManager( new ArrayList<String>(Arrays.asList(USE_ANNOTATIONS)), VRAC );
 
+        if (RSCRIPT_FILE != null && !RScriptExecutor.RSCRIPT_EXISTS)
+            Utils.warnUser(logger, String.format(
+                    "Rscript not found in environment path. %s will be generated but PDF plots will not.",
+                    RSCRIPT_FILE));
+
         if( IGNORE_INPUT_FILTERS != null ) {
             ignoreInputFilterSet.addAll( Arrays.asList(IGNORE_INPUT_FILTERS) );
         }
 
-        for( ReferenceOrderedDataSource d : this.getToolkit().getRodDataSources() ) {
-            if( d.getName().toLowerCase().startsWith("input") ) {
-                inputNames.add(d.getName());
-                logger.info( "Found input variant track with name " + d.getName() );
-            } else {
-                dataManager.addTrainingSet( new TrainingSet(d.getName(), d.getTags()) );
-            }
+        try {
+            tranchesStream = new PrintStream(TRANCHES_FILE);
+        } catch (FileNotFoundException e) {
+            throw new UserException.CouldNotCreateOutputFile(TRANCHES_FILE, e);
+        }
+
+        for( RodBinding<VariantContext> rod : resource ) {
+            dataManager.addTrainingSet( new TrainingSet( rod ) );
         }
 
         if( !dataManager.checkHasTrainingSet() ) {
@@ -137,16 +223,6 @@ public class VariantRecalibrator extends RodWalker<ExpandingArrayList<VariantDat
         }
         if( !dataManager.checkHasTruthSet() ) {
             throw new UserException.CommandLineException( "No truth set found! Please provide sets of known polymorphic loci marked with the truth=true ROD binding tag. For example, -B:hapmap,VCF,known=false,training=true,truth=true,prior=12.0 hapmapFile.vcf" );
-        }
-
-        if( inputNames.size() == 0 ) {
-            throw new UserException.BadInput( "No input variant tracks found. Input variant binding names must begin with 'input'." );
-        }
-
-        try {
-            tranchesStream = new PrintStream(TRANCHES_FILE);
-        } catch (FileNotFoundException e) {
-            throw new UserException.CouldNotCreateOutputFile(TRANCHES_FILE, e);
         }
     }
 
@@ -163,10 +239,12 @@ public class VariantRecalibrator extends RodWalker<ExpandingArrayList<VariantDat
             return mapList;
         }
 
-        for( final VariantContext vc : tracker.getVariantContexts(ref, inputNames, null, context.getLocation(), true, false) ) {
+        for( final VariantContext vc : tracker.getValues(input, context.getLocation()) ) {
             if( vc != null && ( vc.isNotFiltered() || ignoreInputFilterSet.containsAll(vc.getFilters()) ) ) {
                 if( checkRecalibrationMode( vc, VRAC.MODE ) ) {
                     final VariantDatum datum = new VariantDatum();
+
+                    // Populate the datum with lots of fields from the VariantContext, unfortunately the VC is too big so we just pull in only the things we absolutely need.
                     dataManager.decodeAnnotations( datum, vc, true ); //BUGBUG: when run with HierarchicalMicroScheduler this is non-deterministic because order of calls depends on load of machine
                     datum.contig = vc.getChr();
                     datum.start = vc.getStart();
@@ -174,15 +252,14 @@ public class VariantRecalibrator extends RodWalker<ExpandingArrayList<VariantDat
                     datum.originalQual = vc.getPhredScaledQual();
                     datum.isSNP = vc.isSNP() && vc.isBiallelic();
                     datum.isTransition = datum.isSNP && VariantContextUtils.isTransition(vc);
-                    datum.usedForTraining = 0;
 
                     // Loop through the training data sets and if they overlap this loci then update the prior and training status appropriately
-                    dataManager.parseTrainingSets( tracker, ref, context, vc, datum, TRUST_ALL_POLYMORPHIC );
+                    dataManager.parseTrainingSets( tracker, context.getLocation(), vc, datum, TRUST_ALL_POLYMORPHIC );
                     double priorFactor = QualityUtils.qualToProb( datum.prior );
-                    if( PERFORM_PROJECT_CONSENSUS ) {
-                        final double consensusPrior = QualityUtils.qualToProb( 1.0 + 5.0 * datum.consensusCount );
-                        priorFactor = 1.0 - ((1.0 - priorFactor) * (1.0 - consensusPrior));
-                    }
+                    //if( PERFORM_PROJECT_CONSENSUS ) { // BUGBUG: need to resurrect this functionality?
+                    //    final double consensusPrior = QualityUtils.qualToProb( 1.0 + 5.0 * datum.consensusCount );
+                    //    priorFactor = 1.0 - ((1.0 - priorFactor) * (1.0 - consensusPrior));
+                    //}
                     datum.prior = Math.log10( priorFactor ) - Math.log10( 1.0 - priorFactor );
 
                     mapList.add( datum );
@@ -228,18 +305,23 @@ public class VariantRecalibrator extends RodWalker<ExpandingArrayList<VariantDat
     public void onTraversalDone( final ExpandingArrayList<VariantDatum> reduceSum ) {
         dataManager.setData( reduceSum );
         dataManager.normalizeData(); // Each data point is now (x - mean) / standard deviation
+
+        // Generate the positive model using the training data and evaluate each variant
         final GaussianMixtureModel goodModel = engine.generateModel( dataManager.getTrainingData() );
         engine.evaluateData( dataManager.getData(), goodModel, false );
+
+        // Generate the negative model using the worst performing data and evaluate each variant contrastively
         final GaussianMixtureModel badModel = engine.generateModel( dataManager.selectWorstVariants( VRAC.PERCENT_BAD_VARIANTS, VRAC.MIN_NUM_BAD_VARIANTS ) );
         engine.evaluateData( dataManager.getData(), badModel, true );
+        engine.calculateWorstPerformingAnnotation( dataManager.getData(), goodModel, badModel );
 
-        final ExpandingArrayList<VariantDatum> randomData = dataManager.getRandomDataForPlotting( 6000 );
-
+        // Find the VQSLOD cutoff values which correspond to the various tranches of calls requested by the user
         final int nCallsAtTruth = TrancheManager.countCallsAtTruth( dataManager.getData(), Double.NEGATIVE_INFINITY );
         final TrancheManager.SelectionMetric metric = new TrancheManager.TruthSensitivityMetric( nCallsAtTruth );
         final List<Tranche> tranches = TrancheManager.findTranches( dataManager.getData(), TS_TRANCHES, metric );
         tranchesStream.print(Tranche.tranchesString( tranches ));
 
+        // Find the filtering lodCutoff for display on the model PDFs. Red variants are those which were below the cutoff and filtered out of the final callset.
         double lodCutoff = 0.0;
         for( final Tranche tranche : tranches ) {
             if( MathUtils.compareDoubles(tranche.ts, TS_FILTER_LEVEL, 0.0001)==0 ) {
@@ -251,23 +333,16 @@ public class VariantRecalibrator extends RodWalker<ExpandingArrayList<VariantDat
         dataManager.writeOutRecalibrationTable( RECAL_FILE );
         if( RSCRIPT_FILE != null ) {
             logger.info( "Writing out visualization Rscript file...");
-            createVisualizationScript( randomData, goodModel, badModel, lodCutoff );
+            createVisualizationScript( dataManager.getRandomDataForPlotting( 6000 ), goodModel, badModel, lodCutoff );
         }
-
-        // Execute Rscript command to create the tranche plot
-        // Print out the command line to make it clear to the user what is being executed and how one might modify it
-        final String rScriptTranchesCommandLine = PATH_TO_RSCRIPT + " " + PATH_TO_RESOURCES + "plot_Tranches.R" + " " + TRANCHES_FILE.getAbsolutePath() + " " + TARGET_TITV;
-        logger.info( "Executing: " + rScriptTranchesCommandLine );
 
         // Execute the RScript command to plot the table of truth values
-        try {
-            Process p;
-            p = Runtime.getRuntime().exec( rScriptTranchesCommandLine );
-            p.waitFor();
-        } catch ( Exception e ) {
-            Utils.warnUser("Unable to execute the RScript command.  While not critical to the calculations themselves, the script outputs a report that is extremely useful for confirming that the recalibration proceded as expected.  We highly recommend trying to rerun the script manually if possible.");
-        }
-
+        RScriptExecutor executor = new RScriptExecutor();
+        executor.addScript(new Resource(PLOT_TRANCHES_RSCRIPT, VariantRecalibrator.class));
+        executor.addArgs(TRANCHES_FILE.getAbsoluteFile(), TARGET_TITV);
+        // Print out the command line to make it clear to the user what is being executed and how one might modify it
+        logger.info("Executing: " + executor.getApproximateCommandLine());
+        executor.exec();
     }
 
     private void createVisualizationScript( final ExpandingArrayList<VariantDatum> randomData, final GaussianMixtureModel goodModel, final GaussianMixtureModel badModel, final double lodCutoff ) {
@@ -275,13 +350,18 @@ public class VariantRecalibrator extends RodWalker<ExpandingArrayList<VariantDat
         try {
             stream = new PrintStream(RSCRIPT_FILE);
         } catch( FileNotFoundException e ) {
-            throw new UserException.CouldNotCreateOutputFile(RSCRIPT_FILE, "", e);
+            throw new UserException.CouldNotCreateOutputFile(RSCRIPT_FILE, e);
         }
+
+        // We make extensive use of the ggplot2 R library: http://had.co.nz/ggplot2/
         stream.println("library(ggplot2)");
+        // For compactPDF in R 2.13+
+        stream.println("library(tools)");
 
         createArrangeFunction( stream );
 
-        stream.println("pdf(\"" + RSCRIPT_FILE + ".pdf\")"); // Unfortunately this is a huge pdf file, BUGBUG: need to work on reducing the file size
+        stream.println("outputPDF <- \"" + RSCRIPT_FILE + ".pdf\"");
+        stream.println("pdf(outputPDF)"); // Unfortunately this is a huge pdf file, BUGBUG: need to work on reducing the file size
 
         for(int iii = 0; iii < USE_ANNOTATIONS.length; iii++) {
             for( int jjj = iii + 1; jjj < USE_ANNOTATIONS.length; jjj++) {
@@ -326,7 +406,8 @@ public class VariantRecalibrator extends RodWalker<ExpandingArrayList<VariantDat
 
                 stream.print("data <- c(");
                 for( final VariantDatum datum : randomData ) {
-                    stream.print(String.format("%.3f, %.3f, %.3f, %d, %d,", datum.annotations[iii], datum.annotations[jjj], (datum.lod < lodCutoff ? -1.0 : 1.0), datum.usedForTraining, (datum.isKnown ? 1 : -1)));
+                    stream.print(String.format("%.3f, %.3f, %.3f, %d, %d,", datum.annotations[iii], datum.annotations[jjj], (datum.lod < lodCutoff ? -1.0 : 1.0),
+                            (datum.atAntiTrainingSite ? -1 : (datum.atTrainingSite ? 1 : 0)), (datum.isKnown ? 1 : -1)));
                 }
                 stream.println("NA,NA,NA,NA,1)");
                 stream.println("d <- matrix(data,ncol=5,byrow=T)");
@@ -355,20 +436,20 @@ public class VariantRecalibrator extends RodWalker<ExpandingArrayList<VariantDat
         }
         stream.println("dev.off()");
 
+        stream.println("if (exists(\"compactPDF\")) {");
+        stream.println("compactPDF(ouputPDF)");
+        stream.println("}");
+
         stream.close();
 
         // Execute Rscript command to generate the clustering plots
-        final String rScriptTranchesCommandLine = PATH_TO_RSCRIPT + " " +  RSCRIPT_FILE;
-        logger.info( "Executing: " + rScriptTranchesCommandLine );
-        try {
-            Process p;
-            p = Runtime.getRuntime().exec( rScriptTranchesCommandLine );
-            p.waitFor();
-        } catch ( Exception e ) {
-            Utils.warnUser("Unable to execute the RScript command.  While not critical to the calculations themselves, the script outputs a report that is extremely useful for visualizing the recalibration results.  We highly recommend trying to rerun the script manually if possible.");
-        }
+        RScriptExecutor executor = new RScriptExecutor();
+        executor.addScript(RSCRIPT_FILE);
+        logger.info("Executing: " + executor.getApproximateCommandLine());
+        executor.exec();
      }
 
+    // The Arrange function is how we place the 4 model plots on one page
     // from http://gettinggeneticsdone.blogspot.com/2010/03/arrange-multiple-ggplot2-plots-in-same.html
     private void createArrangeFunction( final PrintStream stream ) {
         stream.println("vp.layout <- function(x, y) viewport(layout.pos.row=x, layout.pos.col=y)");
@@ -393,5 +474,4 @@ public class VariantRecalibrator extends RodWalker<ExpandingArrayList<VariantDat
         stream.println("}");
         stream.println("}");
     }
-
- }
+}

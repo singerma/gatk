@@ -25,19 +25,21 @@
 
 package org.broadinstitute.sting.gatk.io.stubs;
 
-import java.io.File;
-import java.io.PrintStream;
-import java.io.OutputStream;
-import java.util.Collection;
-
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFHeader;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLine;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFWriter;
+import net.sf.samtools.SAMSequenceDictionary;
+import net.sf.samtools.SAMSequenceRecord;
 import org.broadinstitute.sting.gatk.CommandLineExecutable;
 import org.broadinstitute.sting.gatk.GenomeAnalysisEngine;
 import org.broadinstitute.sting.gatk.io.OutputTracker;
 import org.broadinstitute.sting.utils.classloader.JVMUtils;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFHeader;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLine;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFWriter;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
+
+import java.io.File;
+import java.io.OutputStream;
+import java.io.PrintStream;
+import java.util.Collection;
 
 /**
  * A stub for routing and management of genotype reading and writing.
@@ -150,6 +152,15 @@ public class VCFWriterStub implements Stub<VCFWriter>, VCFWriter {
     }
 
     /**
+     * Gets the master sequence dictionary from the engine associated with this stub
+     * @link GenomeAnalysisEngine.getMasterSequenceDictionary
+     * @return
+     */
+    public SAMSequenceDictionary getMasterSequenceDictionary() {
+        return engine.getMasterSequenceDictionary();
+    }
+
+    /**
      * Should we tell the VCF writer not to write genotypes?
      * @return true if the writer should not write genotypes.
      */
@@ -177,14 +188,23 @@ public class VCFWriterStub implements Stub<VCFWriter>, VCFWriter {
         vcfHeader = header;
 
         // Check for the command-line argument header line.  If not present, add it in.
-        VCFHeaderLine commandLineArgHeaderLine = getCommandLineArgumentHeaderLine();
-        boolean foundCommandLineHeaderLine = false;
-        for(VCFHeaderLine line: vcfHeader.getMetaData()) {
-            if(line.getKey().equals(commandLineArgHeaderLine.getKey()))
-                foundCommandLineHeaderLine = true;
+        if ( !skipWritingHeader ) {
+            VCFHeaderLine commandLineArgHeaderLine = getCommandLineArgumentHeaderLine();
+            boolean foundCommandLineHeaderLine = false;
+            for (VCFHeaderLine line: vcfHeader.getMetaData()) {
+                if ( line.getKey().equals(commandLineArgHeaderLine.getKey()) )
+                    foundCommandLineHeaderLine = true;
+            }
+            if ( !foundCommandLineHeaderLine )
+                vcfHeader.addMetaDataLine(commandLineArgHeaderLine);
+
+            // also put in the reference contig header lines
+            String assembly = getReferenceAssembly(engine.getArguments().referenceFile.getName());
+            for ( SAMSequenceRecord contig : engine.getReferenceDataSource().getReference().getSequenceDictionary().getSequences() )
+                vcfHeader.addMetaDataLine(getContigHeaderLine(contig, assembly));
+
+            vcfHeader.addMetaDataLine(new VCFHeaderLine("reference", "file://" + engine.getArguments().referenceFile.getAbsolutePath()));
         }
-        if(!foundCommandLineHeaderLine && !skipWritingHeader)
-            vcfHeader.addMetaDataLine(commandLineArgHeaderLine);
 
         outputTracker.getStorage(this).writeHeader(vcfHeader);
     }
@@ -192,8 +212,8 @@ public class VCFWriterStub implements Stub<VCFWriter>, VCFWriter {
     /**
      * @{inheritDoc}
      */
-    public void add(VariantContext vc, byte ref) {
-        outputTracker.getStorage(this).add(vc,ref);
+    public void add(VariantContext vc) {
+        outputTracker.getStorage(this).add(vc);
     }
 
     /**
@@ -219,5 +239,28 @@ public class VCFWriterStub implements Stub<VCFWriter>, VCFWriter {
     private VCFHeaderLine getCommandLineArgumentHeaderLine() {
         CommandLineExecutable executable = JVMUtils.getObjectOfType(argumentSources,CommandLineExecutable.class);
         return new VCFHeaderLine(executable.getAnalysisName(), "\"" + engine.createApproximateCommandLineArgumentString(argumentSources.toArray()) + "\"");
+    }
+
+    private VCFHeaderLine getContigHeaderLine(SAMSequenceRecord contig, String assembly) {
+        String val;
+        if ( assembly != null )
+            val = String.format("<ID=%s,length=%d,assembly=%s>", contig.getSequenceName(), contig.getSequenceLength(), assembly);
+        else
+            val = String.format("<ID=%s,length=%d>", contig.getSequenceName(), contig.getSequenceLength());
+        return new VCFHeaderLine("contig", val);
+    }
+
+    private String getReferenceAssembly(String refPath) {
+        // This doesn't need to be perfect as it's not a required VCF header line, but we might as well give it a shot
+        String assembly = null;
+        if ( refPath.indexOf("b37") != -1 || refPath.indexOf("v37") != -1 )
+            assembly = "b37";
+        else if ( refPath.indexOf("b36") != -1 )
+            assembly = "b36";
+        else if ( refPath.indexOf("hg18") != -1 )
+            assembly = "hg18";
+        else if ( refPath.indexOf("hg19") != -1 )
+            assembly = "hg19";
+        return assembly;
     }
 }

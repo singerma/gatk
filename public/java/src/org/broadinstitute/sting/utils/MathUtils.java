@@ -25,16 +25,13 @@
 
 package org.broadinstitute.sting.utils;
 
-import cern.jet.math.Arithmetic;
-
-import java.math.BigDecimal;
-import java.util.*;
-
 import com.google.java.contract.Requires;
 import net.sf.samtools.SAMRecord;
 import org.broadinstitute.sting.gatk.GenomeAnalysisEngine;
-import org.broadinstitute.sting.utils.collections.PrimitivePair;
 import org.broadinstitute.sting.utils.exceptions.UserException;
+
+import java.math.BigDecimal;
+import java.util.*;
 
 /**
  * MathUtils is a static class (no instantiation allowed!) with some useful math methods.
@@ -128,6 +125,16 @@ public class MathUtils {
 
 
     /**
+     * Calculates the log10 cumulative sum of an array with log10 probabilities
+     * @param log10p the array with log10 probabilites
+     * @param upTo index in the array to calculate the cumsum up to
+     * @return the log10 of the cumulative sum
+     */
+    public static double log10CumulativeSumLog10(double [] log10p, int upTo) {
+        return log10sumLog10(log10p, 0, upTo);
+    }
+
+    /**
      * Converts a real space array of probabilities into a log10 array
      * @param prRealSpace
      * @return
@@ -140,23 +147,27 @@ public class MathUtils {
     }
 
     public static double log10sumLog10(double[] log10p, int start) {
+        return log10sumLog10(log10p, start, log10p.length);
+    }
+
+    public static double log10sumLog10(double[] log10p, int start, int finish) {
         double sum = 0.0;
 
         double maxValue = Utils.findMaxEntry(log10p);
-        for ( int i = start; i < log10p.length; i++ ) {
+        for ( int i = start; i < finish; i++ ) {
             sum += Math.pow(10.0, log10p[i] - maxValue);
         }
 
         return Math.log10(sum) + maxValue;
     }
 
-    public static double sum(List<Double> values) {
+    public static double sumDoubles(List<Double> values) {
         double s = 0.0;
         for ( double v : values) s += v;
         return s;
     }
 
-    public static int sum(List<Integer> values) {
+    public static int sumIntegers(List<Integer> values) {
         int s = 0;
         for ( int v : values) s += v;
         return s;
@@ -350,6 +361,23 @@ public class MathUtils {
 
     /**
      * calculate the Root Mean Square of an array of integers
+     * @param x  an byte[] of numbers
+     * @return   the RMS of the specified numbers.
+    */
+    public static double rms(byte[] x) {
+        if ( x.length == 0 )
+            return 0.0;
+
+        double rms = 0.0;
+        for (int i : x)
+            rms += i * i;
+        rms /= x.length;
+        return Math.sqrt(rms);
+    }
+
+
+    /**
+     * calculate the Root Mean Square of an array of integers
      * @param x  an int[] of numbers
      * @return   the RMS of the specified numbers.
     */
@@ -380,6 +408,17 @@ public class MathUtils {
         return Math.sqrt(rms);
     }
 
+    public static double rms(Collection<Integer> l) {
+        if (l.size() == 0)
+            return 0.0;
+
+        double rms = 0.0;
+        for (int i : l)
+            rms += i*i;
+        rms /= l.size();
+        return Math.sqrt(rms);
+    }
+
     public static double distanceSquared( final double[] x, final double[] y ) {
         double dist = 0.0;
         for(int iii = 0; iii < x.length; iii++) {
@@ -405,11 +444,25 @@ public class MathUtils {
      * @return a newly allocated array corresponding the normalized values in array, maybe log10 transformed
     */
     public static double[] normalizeFromLog10(double[] array, boolean takeLog10OfOutput) {
-        double[] normalized = new double[array.length];
+        return normalizeFromLog10(array, takeLog10OfOutput, false);
+    }
+
+    public static double[] normalizeFromLog10(double[] array, boolean takeLog10OfOutput, boolean keepInLogSpace) {
 
         // for precision purposes, we need to add (or really subtract, since they're
         // all negative) the largest value; also, we need to convert to normal-space.
         double maxValue = Utils.findMaxEntry(array);
+
+        // we may decide to just normalize in log space with converting to linear space
+        if (keepInLogSpace) {
+            for (int i = 0; i < array.length; i++)
+                array[i] -= maxValue;
+            return array;
+        }
+
+        // default case: go to linear space
+        double[] normalized = new double[array.length];
+
         for (int i = 0; i < array.length; i++)
             normalized[i] = Math.pow(10, array[i] - maxValue);
 
@@ -431,7 +484,7 @@ public class MathUtils {
 
         // for precision purposes, we need to add (or really subtract, since they're
         // all negative) the largest value; also, we need to convert to normal-space.
-        double maxValue = MathUtils.arrayMax( array );
+        double maxValue = MathUtils.arrayMaxDouble( array );
         for (int i = 0; i < array.size(); i++)
             normalized[i] = Math.pow(10, array.get(i) - maxValue);
 
@@ -463,6 +516,18 @@ public class MathUtils {
     }
 
     public static int maxElementIndex(double[] array) {
+        if ( array == null ) throw new IllegalArgumentException("Array cannot be null!");
+
+        int maxI = -1;
+        for ( int i = 0; i < array.length; i++ ) {
+            if ( maxI == -1 || array[i] > array[maxI] )
+                maxI = i;
+        }
+
+        return maxI;
+    }
+
+    public static int maxElementIndex(int[] array) {
         if ( array == null ) throw new IllegalArgumentException("Array cannot be null!");
 
         int maxI = -1;
@@ -510,7 +575,7 @@ public class MathUtils {
         return minI;
     }    
 
-    public static int arrayMax(List<Integer> array) {
+    public static int arrayMaxInt(List<Integer> array) {
         if ( array == null ) throw new IllegalArgumentException("Array cannot be null!");
         if ( array.size() == 0 ) throw new IllegalArgumentException("Array size cannot be 0!");
 
@@ -519,7 +584,7 @@ public class MathUtils {
         return m;
     }
 
-    public static double arrayMax(List<Double> array) {
+    public static double arrayMaxDouble(List<Double> array) {
         if ( array == null ) throw new IllegalArgumentException("Array cannot be null!");
         if ( array.size() == 0 ) throw new IllegalArgumentException("Array size cannot be 0!");
 
@@ -728,6 +793,38 @@ public class MathUtils {
         }
 
         return count;
+    }
+
+    public static int countOccurrences(byte element, byte [] array) {
+        int count = 0;
+        for (byte y : array) {
+            if (element == y)
+                count++;
+        }
+
+        return count;
+    }
+
+    /**
+     * Returns the top (larger) N elements of the array. Naive n^2 implementation (Selection Sort).
+     * Better than sorting if N (number of elements to return) is small
+     *
+     * @param array the array
+     * @param n number of top elements to return
+     * @return the n larger elements of the array
+     */
+    public static Collection<Double> getNMaxElements(double [] array, int n) {
+        ArrayList<Double> maxN = new ArrayList<Double>(n);
+        double lastMax = Double.MAX_VALUE;
+        for (int i=0; i<n; i++) {
+            double max = Double.MIN_VALUE;
+            for (double x : array) {
+                max = Math.min(lastMax, Math.max(x, max));
+            }
+            maxN.add(max);
+            lastMax = max;
+        }
+        return maxN;
     }
 
     /**
@@ -973,42 +1070,30 @@ public class MathUtils {
     }
 
     static public double softMax(final double x, final double y) {
-         if (Double.isInfinite(x))
-             return y;
+        // we need to compute log10(10^x + 10^y)
+        // By Jacobian logarithm identity, this is equal to
+        // max(x,y) + log10(1+10^-abs(x-y))
+        // we compute the second term as a table lookup
+        // with integer quantization
 
-         if (Double.isInfinite(y))
-             return x;
+        // slow exact version:
+        // return Math.log10(Math.pow(10.0,x) + Math.pow(10.0,y));
 
-         if (y >= x + MAX_JACOBIAN_TOLERANCE)
-             return y;
-         if (x >= y + MAX_JACOBIAN_TOLERANCE)
-             return x;
+        double diff = x-y;
 
-         // OK, so |y-x| < tol: we use the following identity then:
-         // we need to compute log10(10^x + 10^y)
-         // By Jacobian logarithm identity, this is equal to
-         // max(x,y) + log10(1+10^-abs(x-y))
-         // we compute the second term as a table lookup
-         // with integer quantization
-
-         //double diff = Math.abs(x-y);
-         double diff = x-y;
-         double t1 =x;
-         if (diff<0) { //
-             t1 = y;
-             diff= -diff;
-         }
-         // t has max(x,y), diff has abs(x-y)
-         // we have pre-stored correction for 0,0.1,0.2,... 10.0
-         //int ind = (int)Math.round(diff*INV_JACOBIAN_LOG_TABLE_STEP);
-         int ind = (int)(diff*INV_JACOBIAN_LOG_TABLE_STEP+0.5);
-         // gdebug+
-         //double z =Math.log10(1+Math.pow(10.0,-diff));
-         //System.out.format("x: %f, y:%f, app: %f, true: %f ind:%d\n",x,y,t2,z,ind);
-         //gdebug-
-         return t1+jacobianLogTable[ind];
-         // return Math.log10(Math.pow(10.0,x) + Math.pow(10.0,y));
-     }
+        if (diff > MAX_JACOBIAN_TOLERANCE)
+            return x;
+        else if (diff < -MAX_JACOBIAN_TOLERANCE)
+            return y;
+        else if (diff >= 0) {
+            int ind = (int)(diff*INV_JACOBIAN_LOG_TABLE_STEP+0.5);
+            return x + jacobianLogTable[ind];
+        }
+        else {
+            int ind = (int)(-diff*INV_JACOBIAN_LOG_TABLE_STEP+0.5);
+            return y + jacobianLogTable[ind];
+        }
+    }
 
     public static double phredScaleToProbability (byte q) {
         return Math.pow(10,(-q)/10.0);
@@ -1018,6 +1103,11 @@ public class MathUtils {
         return ((-q)/10.0);
     }
 
+    /**
+     * Returns the phred scaled value of probability p
+     * @param p probability (between 0 and 1).
+     * @return phred scaled probability of p
+     */
     public static byte probabilityToPhredScale (double p) {
         return (byte) ((-10) * Math.log10(p));
     }
@@ -1277,5 +1367,4 @@ public class MathUtils {
     public static double log10Factorial (int x) {
         return log10Gamma(x+1);
     }
-
 }

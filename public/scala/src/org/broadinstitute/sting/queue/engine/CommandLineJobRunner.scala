@@ -26,12 +26,16 @@ package org.broadinstitute.sting.queue.engine
 
 import org.broadinstitute.sting.queue.function.CommandLineFunction
 import java.io.File
-import org.broadinstitute.sting.queue.util.{Logging, IOUtils}
+import org.broadinstitute.sting.queue.util.Logging
+import org.broadinstitute.sting.utils.io.IOUtils
 
 /**
  * Runs a command line function.
  */
 trait CommandLineJobRunner extends JobRunner[CommandLineFunction] with Logging {
+
+  /** The string representation of the identifier of the running job. */
+  def jobIdString: String = null
 
   /** A generated exec shell script. */
   protected var jobScript: File = _
@@ -39,9 +43,34 @@ trait CommandLineJobRunner extends JobRunner[CommandLineFunction] with Logging {
   /** Which directory to use for the job status files. */
   protected def jobStatusDir = function.jobTempDir
 
+  /** Amount of time a job can go without status before giving up. */
+  private val unknownStatusMaxSeconds = 5 * 60
+
+  /** Last known status */
+  protected var lastStatus: RunnerStatus.Value = _
+
+  /** The last time the status was updated */
+  protected var lastStatusUpdate: Long = _
+
+  /** The runner specific priority for a minimum priority job */
+  protected val minRunnerPriority = 0
+
+  /** The runner specific priority for a maximum priority job */
+  protected val maxRunnerPriority = 0
+
+  /** The priority of the function in the range defined by the runner */
+  protected def functionPriority = {
+    function.jobPriority.map { priority =>
+      (((priority / 100D) * (maxRunnerPriority - minRunnerPriority)) + minRunnerPriority).
+        round.intValue() min maxRunnerPriority max minRunnerPriority
+    }
+  }
+
+  final override def status = this.lastStatus
+
   override def init() {
     super.init()
-    var exec = new StringBuilder
+    val exec = new StringBuilder
     
     var dirs = Set.empty[File]
     for (dir <- function.jobDirectories)
@@ -53,7 +82,21 @@ trait CommandLineJobRunner extends JobRunner[CommandLineFunction] with Logging {
     }
     exec.append(function.commandLine)
 
-    this.jobScript = IOUtils.writeTempFile(exec.toString, ".exec", "", jobStatusDir)
+    this.jobScript = IOUtils.writeTempFile(exec.toString(), ".exec", "", jobStatusDir)
+  }
+
+  protected def updateStatus(updatedStatus: RunnerStatus.Value) {
+    this.lastStatus = updatedStatus
+    this.lastStatusUpdate = System.currentTimeMillis
+  }
+
+  override def checkUnknownStatus() {
+    val unknownStatusMillis = (System.currentTimeMillis - lastStatusUpdate)
+    if (unknownStatusMillis > (unknownStatusMaxSeconds * 1000L)) {
+      // Unknown status has been returned for a while now.
+      updateStatus(RunnerStatus.FAILED)
+      logger.error("Unable to read status for %0.2f minutes: job id %d: %s".format(unknownStatusMillis/(60 * 1000D), jobIdString, function.description))
+    }
   }
 
   override def cleanup() {

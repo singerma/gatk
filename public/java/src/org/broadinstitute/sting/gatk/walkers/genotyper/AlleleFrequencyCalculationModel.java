@@ -26,14 +26,16 @@
 package org.broadinstitute.sting.gatk.walkers.genotyper;
 
 import org.apache.log4j.Logger;
-import org.broadinstitute.sting.utils.variantcontext.Allele;
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
 import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
+import org.broadinstitute.sting.utils.variantcontext.Allele;
 import org.broadinstitute.sting.utils.variantcontext.Genotype;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
 import java.io.PrintStream;
-import java.util.*;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 
 /**
@@ -43,7 +45,9 @@ import java.util.*;
 public abstract class AlleleFrequencyCalculationModel implements Cloneable {
 
     public enum Model {
+        /** The default model with the best performance in all cases */
         EXACT,
+        /** For posterity we have kept around the older GRID_SEARCH model, but this gives inferior results and shouldn't be used. */
         GRID_SEARCH
     }
 
@@ -64,16 +68,12 @@ public abstract class AlleleFrequencyCalculationModel implements Cloneable {
 
     /**
      * Must be overridden by concrete subclasses
-     * @param tracker                         rod data
-     * @param ref                             reference context
      * @param GLs                             genotype likelihoods
      * @param Alleles                       Alleles corresponding to GLs
      * @param log10AlleleFrequencyPriors      priors
      * @param log10AlleleFrequencyPosteriors  array (pre-allocated) to store results
      */
-    protected abstract void getLog10PNonRef(RefMetaDataTracker tracker,
-                                            ReferenceContext ref,
-                                            Map<String, Genotype> GLs,  Set<Allele> Alleles,
+    protected abstract void getLog10PNonRef(Map<String, Genotype> GLs,  List<Allele> Alleles,
                                             double[] log10AlleleFrequencyPriors,
                                             double[] log10AlleleFrequencyPosteriors);
 

@@ -25,23 +25,24 @@
 
 package org.broadinstitute.sting.gatk.walkers.genotyper;
 
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
+import org.apache.log4j.Logger;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContextUtils;
-import org.broadinstitute.sting.utils.*;
-import org.broadinstitute.sting.utils.baq.BAQ;
-import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
-import org.broadinstitute.sting.utils.exceptions.StingException;
-import org.broadinstitute.sting.utils.genotype.DiploidGenotype;
-import org.broadinstitute.sting.utils.pileup.ReadBackedPileup;
-import org.broadinstitute.sting.utils.pileup.PileupElement;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
 import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
-import org.broadinstitute.sting.utils.variantcontext.Allele;
-import org.apache.log4j.Logger;
+import org.broadinstitute.sting.utils.BaseUtils;
+import org.broadinstitute.sting.utils.MathUtils;
+import org.broadinstitute.sting.utils.baq.BAQ;
+import org.broadinstitute.sting.utils.exceptions.StingException;
+import org.broadinstitute.sting.utils.pileup.PileupElement;
+import org.broadinstitute.sting.utils.pileup.ReadBackedPileup;
 import org.broadinstitute.sting.utils.pileup.ReadBackedPileupImpl;
+import org.broadinstitute.sting.utils.variantcontext.Allele;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 public class SNPGenotypeLikelihoodsCalculationModel extends GenotypeLikelihoodsCalculationModel {
 
@@ -53,25 +54,6 @@ public class SNPGenotypeLikelihoodsCalculationModel extends GenotypeLikelihoodsC
     protected SNPGenotypeLikelihoodsCalculationModel(UnifiedArgumentCollection UAC, Logger logger) {
         super(UAC, logger);
         useAlleleFromVCF = UAC.GenotypingMode == GENOTYPING_MODE.GENOTYPE_GIVEN_ALLELES;
-    }
-
-    public static VariantContext getSNPVCFromAllelesRod(RefMetaDataTracker tracker, ReferenceContext ref, boolean requireSNP, Logger logger) {
-        if ( tracker == null || ref == null || logger == null )
-            throw new ReviewedStingException("Bad arguments: tracker=" + tracker + " ref=" + ref + " logger=" + logger);
-        VariantContext vc = null;
-
-        // search for usable record
-        for( final VariantContext vc_input : tracker.getVariantContexts(ref, "alleles", null, ref.getLocus(), true, false) ) {
-            if ( vc_input != null && ! vc_input.isFiltered() && (! requireSNP || vc_input.isSNP() )) {
-                if ( vc == null ) {
-                    vc = vc_input;
-                } else {
-                    logger.warn("Multiple valid VCF records detected at site " + ref.getLocus() + ", only considering alleles from first record only");
-                }
-            }
-        }
-
-        return vc;
     }
 
     public Allele getLikelihoods(RefMetaDataTracker tracker,
@@ -93,7 +75,7 @@ public class SNPGenotypeLikelihoodsCalculationModel extends GenotypeLikelihoodsC
         if ( alternateAlleleToUse != null ) {
             bestAlternateAllele = alternateAlleleToUse.getBases()[0];
         } else if ( useAlleleFromVCF ) {
-            VariantContext vc = getSNPVCFromAllelesRod(tracker, ref, true, logger);
+            VariantContext vc = UnifiedGenotyperEngine.getVCFromAllelesRod(tracker, ref, ref.getLocus(), true, logger, UAC.alleles);
 
             // ignore places where we don't have a variant
             if ( vc == null )
@@ -140,8 +122,10 @@ public class SNPGenotypeLikelihoodsCalculationModel extends GenotypeLikelihoodsC
             aList.add(refAllele);
             aList.add(altAllele);
             double[] dlike = new double[]{likelihoods[refGenotype.ordinal()],likelihoods[hetGenotype.ordinal()],likelihoods[homGenotype.ordinal()]} ;
+
+            // normalize in log space so that max element is zero.
             GLs.put(sample.getKey(), new MultiallelicGenotypeLikelihoods(sample.getKey(),
-                    aList,  dlike, getFilteredDepth(pileup)));
+                    aList,  MathUtils.normalizeFromLog10(dlike, false, true), getFilteredDepth(pileup)));
         }
 
         return refAllele;

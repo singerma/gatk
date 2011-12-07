@@ -25,40 +25,39 @@
 
 package org.broadinstitute.sting.gatk.walkers.annotator;
 
+import org.broadinstitute.sting.commandline.Hidden;
 import org.broadinstitute.sting.gatk.contexts.AlignmentContext;
-import org.broadinstitute.sting.gatk.walkers.annotator.interfaces.GenotypeAnnotation;
-import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
-import org.broadinstitute.sting.utils.pileup.ReadBackedPileup;
+import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
+import org.broadinstitute.sting.gatk.walkers.annotator.interfaces.AnnotatorCompatibleWalker;
+import org.broadinstitute.sting.gatk.walkers.annotator.interfaces.GenotypeAnnotation;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFFormatHeaderLine;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLineCount;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLineType;
+import org.broadinstitute.sting.utils.pileup.ExtendedEventPileupElement;
 import org.broadinstitute.sting.utils.pileup.PileupElement;
 import org.broadinstitute.sting.utils.pileup.ReadBackedExtendedEventPileup;
-import org.broadinstitute.sting.utils.pileup.ExtendedEventPileupElement;
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
-import org.broadinstitute.sting.utils.variantcontext.Genotype;
+import org.broadinstitute.sting.utils.pileup.ReadBackedPileup;
 import org.broadinstitute.sting.utils.variantcontext.Allele;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFFormatHeaderLine;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFCompoundHeaderLine;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFHeaderLineType;
+import org.broadinstitute.sting.utils.variantcontext.Genotype;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
-import java.util.Map;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Arrays;
+import java.util.Map;
 
 /**
- * Created by IntelliJ IDEA.
- * User: asivache
- * Date: Feb 4, 2011
- * Time: 3:59:27 PM
- * To change this template use File | Settings | File Templates.
+ * Unsupported
  */
-public class ReadDepthAndAllelicFractionBySample implements GenotypeAnnotation {
+@Hidden
+public class ReadDepthAndAllelicFractionBySample extends GenotypeAnnotation {
 
         private static String REF_ALLELE = "REF";
 
         private static String DEL = "DEL"; // constant, for speed: no need to create a key string for deletion allele every time
 
-        public Map<String, Object> annotate(RefMetaDataTracker tracker, ReferenceContext ref,
+        public Map<String, Object> annotate(RefMetaDataTracker tracker, AnnotatorCompatibleWalker walker, ReferenceContext ref,
                                             AlignmentContext stratifiedContext, VariantContext vc, Genotype g) {
             if ( g == null || !g.isCalled() )
                 return null;
@@ -80,7 +79,7 @@ public class ReadDepthAndAllelicFractionBySample implements GenotypeAnnotation {
                 alleleCounts.put(allele.getBases()[0], 0);
 
             ReadBackedPileup pileup = stratifiedContext.getBasePileup();
-            int totalDepth = pileup.size();
+            int totalDepth = pileup.getNumberOfElements();
 
             Map<String, Object> map = new HashMap<String, Object>();
             map.put(getKeyNames().get(0), totalDepth); // put total depth in right away
@@ -120,7 +119,7 @@ public class ReadDepthAndAllelicFractionBySample implements GenotypeAnnotation {
             ReadBackedExtendedEventPileup pileup = stratifiedContext.getExtendedEventPileup();
             if ( pileup == null )
                 return null;
-            int totalDepth = pileup.size();
+            int totalDepth = pileup.getNumberOfElements();
 
             Map<String, Object> map = new HashMap<String, Object>();
             map.put(getKeyNames().get(0), totalDepth); // put total depth in right away
@@ -200,8 +199,8 @@ public class ReadDepthAndAllelicFractionBySample implements GenotypeAnnotation {
                             1,
                             VCFHeaderLineType.Integer,
                             "Total read depth per sample, including MQ0"),
-                    new VCFFormatHeaderLine(getKeyNames().get(1),
-                            VCFCompoundHeaderLine.UNBOUNDED,
+                            new VCFFormatHeaderLine(getKeyNames().get(1),
+                            VCFHeaderLineCount.UNBOUNDED,
                             VCFHeaderLineType.Float,
                             "Fractions of reads (excluding MQ0 from both ref and alt) supporting each reported alternative allele, per sample"));
         }

@@ -39,7 +39,7 @@ import java.io.IOException;
  */
 public class HapMapUnitTest {
     // our sample hapmap file
-    private final static File hapMapFile = new File("testdata/genotypes_chr1_ASW_phase3.3_first500.hapmap");
+    private final static File hapMapFile = new File("public/testdata/genotypes_chr1_ASW_phase3.3_first500.hapmap");
     private final static String knownLine = "rs2185539 C/T chr1 556738 + ncbi_b36 bbs urn:lsid:bbs.hapmap.org:Protocol:Phase3.r3:1 urn:lsid:bbs.hapmap.org:Assay:Phase3.r3_r" +
             "s2185539:1 urn:lsid:dcc.hapmap.org:Panel:US_African-30-trios:4 QC+ CC TC TT CT CC CC CC CC CC CC CC CC CC";
     /**
@@ -49,12 +49,12 @@ public class HapMapUnitTest {
      */
     @Test
     public void testReadHeader() {
-        HapMapCodec codec = new HapMapCodec();
+        RawHapMapCodec codec = new RawHapMapCodec();
         AsciiLineReader reader = getReader();
         try {
             String header = reader.readLine();
             reader.close();
-            Assert.assertTrue(header.equals((String)codec.readHeader(getReader())));
+            Assert.assertTrue(header.equals(codec.readHeader(getReader())));
         } catch (IOException e) {
             Assert.fail("Unable to read from file " + hapMapFile);
         }
@@ -63,8 +63,8 @@ public class HapMapUnitTest {
 
     @Test
     public void testKnownRecordConversion() {
-        HapMapCodec codec = new HapMapCodec();
-        HapMapFeature feature = (HapMapFeature)codec.decode(knownLine);
+        RawHapMapCodec codec = new RawHapMapCodec();
+        RawHapMapFeature feature = (RawHapMapFeature)codec.decode(knownLine);
 
 
         // check that the alleles are right
@@ -110,16 +110,16 @@ public class HapMapUnitTest {
     @Test
     public void testReadCorrectNumberOfRecords() {
         // setup the record for reading our 500 line file (499 records, 1 header line)
-        HapMapCodec codec = new HapMapCodec();
+        RawHapMapCodec codec = new RawHapMapCodec();
         AsciiLineReader reader = getReader();
 
-        String line = null;
+        String line;
         int count = 0;
         try {
             codec.readHeader(reader);
             line = reader.readLine();
             while (line != null) {
-                HapMapFeature feature = (HapMapFeature) codec.decode(line);
+                codec.decode(line);
                 line = reader.readLine();
                 ++count;
             }
@@ -133,14 +133,14 @@ public class HapMapUnitTest {
     @Test
     public void testGetSampleNames() {
         // setup the record for reading our 500 line file (499 records, 1 header line)
-        HapMapCodec codec = new HapMapCodec();
+        RawHapMapCodec codec = new RawHapMapCodec();
         AsciiLineReader reader = getReader();
 
-        String line = null;
+        String line;
         try {
             codec.readHeader(reader);
             line = reader.readLine();
-            HapMapFeature feature = (HapMapFeature) codec.decode(line);
+            RawHapMapFeature feature = (RawHapMapFeature) codec.decode(line);
             Assert.assertEquals(feature.getSampleIDs().length,87);
 
         } catch (IOException e) {

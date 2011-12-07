@@ -2,9 +2,10 @@ package org.broadinstitute.sting.utils.variantcontext;
 
 import org.broad.tribble.Feature;
 import org.broad.tribble.TribbleException;
-import org.broadinstitute.sting.utils.codecs.vcf.VCFConstants;
 import org.broad.tribble.util.ParsingUtils;
+import org.broadinstitute.sting.utils.codecs.vcf.VCFConstants;
 import org.broadinstitute.sting.utils.codecs.vcf.VCFParser;
+import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
 
 import java.util.*;
 
@@ -131,7 +132,7 @@ import java.util.*;
  * vc.hasGenotypes()
  * vc.isMonomorphic()
  * vc.isPolymorphic()
- * vc.getSampleNames().size()
+ * vc.getSamples().size()
  *
  * vc.getGenotypes()
  * vc.getGenotypes().get("g1")
@@ -163,10 +164,11 @@ import java.util.*;
 public class VariantContext implements Feature { // to enable tribble intergration
     protected InferredGeneticContext commonInfo = null;
     public final static double NO_NEG_LOG_10PERROR = InferredGeneticContext.NO_NEG_LOG_10PERROR;
-    public final static String REFERENCE_BASE_FOR_INDEL_KEY = "_REFERENCE_BASE_FOR_INDEL_";
     public final static String UNPARSED_GENOTYPE_MAP_KEY = "_UNPARSED_GENOTYPE_MAP_";
     public final static String UNPARSED_GENOTYPE_PARSER_KEY = "_UNPARSED_GENOTYPE_PARSER_";
     public final static String ID_KEY = "ID";
+
+    private final Byte REFERENCE_BASE_FOR_INDEL;
 
     public final static Set<String> PASSES_FILTERS = Collections.unmodifiableSet(new LinkedHashSet<String>());
 
@@ -179,7 +181,7 @@ public class VariantContext implements Feature { // to enable tribble intergrati
     protected Type type = null;
 
     /** A set of the alleles segregating in this context */
-    protected LinkedHashSet<Allele> alleles = null;
+    final protected List<Allele> alleles;
 
     /** A mapping from sampleName -> genotype objects for all genotypes associated with this context */
     protected Map<String, Genotype> genotypes = null;
@@ -207,6 +209,25 @@ public class VariantContext implements Feature { // to enable tribble intergrati
 
     /**
      * the complete constructor.  Makes a complete VariantContext from its arguments
+     * This is the only constructor that is able to create indels! DO NOT USE THE OTHER ONES.
+     *
+     * @param source          source
+     * @param contig          the contig
+     * @param start           the start base (one based)
+     * @param stop            the stop reference base (one based)
+     * @param alleles         alleles
+     * @param genotypes       genotypes map
+     * @param negLog10PError  qual
+     * @param filters         filters: use null for unfiltered and empty set for passes filters
+     * @param attributes      attributes
+     * @param referenceBaseForIndel   padded reference base
+     */
+    public VariantContext(String source, String contig, long start, long stop, Collection<Allele> alleles, Map<String, Genotype> genotypes, double negLog10PError, Set<String> filters, Map<String, ?> attributes, Byte referenceBaseForIndel) {
+        this(source, contig, start, stop, alleles, genotypes, negLog10PError, filters, attributes, referenceBaseForIndel, false);
+    }
+
+    /**
+     * the complete constructor.  Makes a complete VariantContext from its arguments
      *
      * @param source          source
      * @param contig          the contig
@@ -219,7 +240,7 @@ public class VariantContext implements Feature { // to enable tribble intergrati
      * @param attributes      attributes
      */
     public VariantContext(String source, String contig, long start, long stop, Collection<Allele> alleles, Map<String, Genotype> genotypes, double negLog10PError, Set<String> filters, Map<String, ?> attributes) {
-        this(source, contig, start, stop, alleles, genotypes, negLog10PError, filters, attributes, false);
+        this(source, contig, start, stop, alleles, genotypes, negLog10PError, filters, attributes, null, false);
     }
 
     /**
@@ -237,9 +258,10 @@ public class VariantContext implements Feature { // to enable tribble intergrati
      * @param negLog10PError  qual
      * @param filters         filters: use null for unfiltered and empty set for passes filters
      * @param attributes      attributes
+     * @param referenceBaseForIndel   padded reference base
      */
-    public VariantContext(String source, String contig, long start, long stop, Collection<Allele> alleles, double negLog10PError, Set<String> filters, Map<String, ?> attributes) {
-        this(source, contig, start, stop, alleles, NO_GENOTYPES, negLog10PError, filters, attributes, true);
+    public VariantContext(String source, String contig, long start, long stop, Collection<Allele> alleles, double negLog10PError, Set<String> filters, Map<String, ?> attributes, Byte referenceBaseForIndel) {
+        this(source, contig, start, stop, alleles, NO_GENOTYPES, negLog10PError, filters, attributes, referenceBaseForIndel, true);
     }
 
     /**
@@ -256,7 +278,7 @@ public class VariantContext implements Feature { // to enable tribble intergrati
      * @param attributes     attributes
      */
     public VariantContext(String source, String contig, long start, long stop, Collection<Allele> alleles, Collection<Genotype> genotypes, double negLog10PError, Set<String> filters, Map<String, ?> attributes) {
-        this(source, contig, start, stop, alleles, genotypes != null ? genotypeCollectionToMap(new TreeMap<String, Genotype>(), genotypes) : null, negLog10PError, filters, attributes, false);
+        this(source, contig, start, stop, alleles, genotypes != null ? genotypeCollectionToMap(new TreeMap<String, Genotype>(), genotypes) : null, negLog10PError, filters, attributes, null, false);
     }
 
     /**
@@ -269,11 +291,11 @@ public class VariantContext implements Feature { // to enable tribble intergrati
      * @param alleles alleles
      */
     public VariantContext(String source, String contig, long start, long stop, Collection<Allele> alleles) {
-        this(source, contig, start, stop, alleles, NO_GENOTYPES, InferredGeneticContext.NO_NEG_LOG_10PERROR, null, null, false);
+        this(source, contig, start, stop, alleles, NO_GENOTYPES, InferredGeneticContext.NO_NEG_LOG_10PERROR, null, null, null, false);
     }
 
     /**
-     * Create a new variant context without genotypes and no Perror, no filters, and no attributes
+     * Create a new variant context with genotypes but without Perror, filters, and attributes
      *
      * @param source          source
      * @param contig          the contig
@@ -292,7 +314,7 @@ public class VariantContext implements Feature { // to enable tribble intergrati
      * @param other the VariantContext to copy
      */
     public VariantContext(VariantContext other) {
-        this(other.getSource(), other.getChr(), other.getStart(), other.getEnd() , other.getAlleles(), other.getGenotypes(), other.getNegLog10PError(), other.filtersWereApplied() ? other.getFilters() : null, other.getAttributes(), false);
+        this(other.getSource(), other.getChr(), other.getStart(), other.getEnd() , other.getAlleles(), other.getGenotypes(), other.getNegLog10PError(), other.filtersWereApplied() ? other.getFilters() : null, other.getAttributes(), other.REFERENCE_BASE_FOR_INDEL, false);
     }
 
     /**
@@ -307,8 +329,13 @@ public class VariantContext implements Feature { // to enable tribble intergrati
      * @param negLog10PError  qual
      * @param filters         filters: use null for unfiltered and empty set for passes filters
      * @param attributes      attributes
+     * @param referenceBaseForIndel   padded reference base
+     * @param genotypesAreUnparsed    true if the genotypes have not yet been parsed
      */
-    private VariantContext(String source, String contig, long start, long stop, Collection<Allele> alleles, Map<String, Genotype> genotypes, double negLog10PError, Set<String> filters, Map<String, ?> attributes, boolean genotypesAreUnparsed) {
+    private VariantContext(String source, String contig, long start, long stop,
+                           Collection<Allele> alleles, Map<String, Genotype> genotypes,
+                           double negLog10PError, Set<String> filters, Map<String, ?> attributes,
+                           Byte referenceBaseForIndel, boolean genotypesAreUnparsed) {
         if ( contig == null ) { throw new IllegalArgumentException("Contig cannot be null"); }
         this.contig = contig;
         this.start = start;
@@ -323,11 +350,12 @@ public class VariantContext implements Feature { // to enable tribble intergrati
 
         this.commonInfo = new InferredGeneticContext(source, negLog10PError, filters, attributes);
         filtersWereAppliedToContext = filters != null;
+        REFERENCE_BASE_FOR_INDEL = referenceBaseForIndel;
 
         if ( alleles == null ) { throw new IllegalArgumentException("Alleles cannot be null"); }
 
         // we need to make this a LinkedHashSet in case the user prefers a given ordering of alleles
-        this.alleles = alleleCollectionToSet(new LinkedHashSet<Allele>(), alleles);
+        this.alleles = makeAlleles(alleles);
 
 
         if ( genotypes == null ) { genotypes = NO_GENOTYPES; }
@@ -355,23 +383,27 @@ public class VariantContext implements Feature { // to enable tribble intergrati
     // ---------------------------------------------------------------------------------------------------------
 
     public static VariantContext modifyGenotypes(VariantContext vc, Map<String, Genotype> genotypes) {
-        return new VariantContext(vc.getSource(), vc.getChr(), vc.getStart(), vc.getEnd(), vc.getAlleles(), genotypes, vc.getNegLog10PError(), vc.filtersWereApplied() ? vc.getFilters() : null, new HashMap<String, Object>(vc.getAttributes()), false);
+        return new VariantContext(vc.getSource(), vc.getChr(), vc.getStart(), vc.getEnd(), vc.getAlleles(), genotypes, vc.getNegLog10PError(), vc.filtersWereApplied() ? vc.getFilters() : null, new HashMap<String, Object>(vc.getAttributes()), vc.getReferenceBaseForIndel(), false);
     }
 
     public static VariantContext modifyLocation(VariantContext vc, String chr, int start, int end) {
-        return new VariantContext(vc.getSource(), chr, start, end, vc.getAlleles(), vc.genotypes, vc.getNegLog10PError(), vc.filtersWereApplied() ? vc.getFilters() : null, new HashMap<String, Object>(vc.getAttributes()), true);
+        return new VariantContext(vc.getSource(), chr, start, end, vc.getAlleles(), vc.genotypes, vc.getNegLog10PError(), vc.filtersWereApplied() ? vc.getFilters() : null, new HashMap<String, Object>(vc.getAttributes()), vc.getReferenceBaseForIndel(), true);
     }
 
     public static VariantContext modifyFilters(VariantContext vc, Set<String> filters) {
-        return new VariantContext(vc.getSource(), vc.getChr(), vc.getStart(), vc.getEnd() , vc.getAlleles(), vc.genotypes, vc.getNegLog10PError(), filters, new HashMap<String, Object>(vc.getAttributes()), true);
+        return new VariantContext(vc.getSource(), vc.getChr(), vc.getStart(), vc.getEnd() , vc.getAlleles(), vc.genotypes, vc.getNegLog10PError(), filters, new HashMap<String, Object>(vc.getAttributes()), vc.getReferenceBaseForIndel(), true);
     }
 
     public static VariantContext modifyAttributes(VariantContext vc, Map<String, Object> attributes) {
-        return new VariantContext(vc.getSource(), vc.getChr(), vc.getStart(), vc.getEnd(), vc.getAlleles(), vc.genotypes, vc.getNegLog10PError(), vc.filtersWereApplied() ? vc.getFilters() : null, attributes, true);
+        return new VariantContext(vc.getSource(), vc.getChr(), vc.getStart(), vc.getEnd(), vc.getAlleles(), vc.genotypes, vc.getNegLog10PError(), vc.filtersWereApplied() ? vc.getFilters() : null, attributes, vc.getReferenceBaseForIndel(), true);
+    }
+
+    public static VariantContext modifyReferencePadding(VariantContext vc, Byte b) {
+        return new VariantContext(vc.getSource(), vc.getChr(), vc.getStart(), vc.getEnd(), vc.getAlleles(), vc.genotypes, vc.getNegLog10PError(), vc.filtersWereApplied() ? vc.getFilters() : null, vc.getAttributes(), b, true);
     }
 
     public static VariantContext modifyPErrorFiltersAndAttributes(VariantContext vc, double negLog10PError, Set<String> filters, Map<String, Object> attributes) {
-        return new VariantContext(vc.getSource(), vc.getChr(), vc.getStart(), vc.getEnd(), vc.getAlleles(), vc.genotypes, negLog10PError, filters, attributes, true);
+        return new VariantContext(vc.getSource(), vc.getChr(), vc.getStart(), vc.getEnd(), vc.getAlleles(), vc.genotypes, negLog10PError, filters, attributes, vc.getReferenceBaseForIndel(), true);
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -413,8 +445,8 @@ public class VariantContext implements Feature { // to enable tribble intergrati
      * @param alleles the set of allele segregating alleles at this site.  Must include those in genotypes, but may be more
      * @return vc subcontext
      */
-    public VariantContext subContextFromGenotypes(Collection<Genotype> genotypes, Set<Allele> alleles) {
-        return new VariantContext(getSource(), contig, start, stop, alleles, genotypes, getNegLog10PError(), getFilters(), getAttributes());
+    public VariantContext subContextFromGenotypes(Collection<Genotype> genotypes, Collection<Allele> alleles) {
+        return new VariantContext(getSource(), contig, start, stop, alleles, genotypes != null ? genotypeCollectionToMap(new TreeMap<String, Genotype>(), genotypes) : null, getNegLog10PError(), filtersWereApplied() ? getFilters() : null, getAttributes(), getReferenceBaseForIndel());
     }
 
 
@@ -553,21 +585,32 @@ public class VariantContext implements Feature { // to enable tribble intergrati
     /**
      * @return true if the alleles indicate a simple insertion (i.e., the reference allele is Null)
      */
-    public boolean isInsertion() {
-        // can't just call !isDeletion() because of complex indels
-        return getType() == Type.INDEL && getReference().isNull();
+    public boolean isSimpleInsertion() {
+        // can't just call !isSimpleDeletion() because of complex indels
+        return getType() == Type.INDEL && getReference().isNull() && isBiallelic();
     }
 
     /**
      * @return true if the alleles indicate a simple deletion (i.e., a single alt allele that is Null)
      */
-    public boolean isDeletion() {
-        // can't just call !isInsertion() because of complex indels
-        return getType() == Type.INDEL && getAlternateAllele(0).isNull();
+    public boolean isSimpleDeletion() {
+        // can't just call !isSimpleInsertion() because of complex indels
+        return getType() == Type.INDEL && getAlternateAllele(0).isNull() && isBiallelic();
+    }
+
+    /**
+     * @return true if the alleles indicate neither a simple deletion nor a simple insertion
+     */
+    public boolean isComplexIndel() {
+        return isIndel() && !isSimpleDeletion() && !isSimpleInsertion();
     }
 
     public boolean isSymbolic() {
         return getType() == Type.SYMBOLIC;
+    }
+
+    public boolean isMNP() {
+        return getType() == Type.MNP;
     }
 
     /**
@@ -592,6 +635,15 @@ public class VariantContext implements Feature { // to enable tribble intergrati
         return (String)commonInfo.getAttribute(ID_KEY);
     }
 
+    public boolean hasReferenceBaseForIndel() {
+        return REFERENCE_BASE_FOR_INDEL != null;
+    }
+
+    // the indel base that gets stripped off for indels
+    public Byte getReferenceBaseForIndel() {
+        return REFERENCE_BASE_FOR_INDEL;
+    }
+
     // ---------------------------------------------------------------------------------------------------------
     //
     // get routines to access context info fields
@@ -614,20 +666,10 @@ public class VariantContext implements Feature { // to enable tribble intergrati
         return commonInfo.getAttribute(key, defaultValue);
     }
 
-    public String getAttributeAsString(String key)                        { return commonInfo.getAttributeAsString(key); }
     public String getAttributeAsString(String key, String defaultValue)   { return commonInfo.getAttributeAsString(key, defaultValue); }
-    public int getAttributeAsInt(String key)                              { return commonInfo.getAttributeAsInt(key); }
     public int getAttributeAsInt(String key, int defaultValue)            { return commonInfo.getAttributeAsInt(key, defaultValue); }
-    public double getAttributeAsDouble(String key)                        { return commonInfo.getAttributeAsDouble(key); }
     public double getAttributeAsDouble(String key, double  defaultValue)  { return commonInfo.getAttributeAsDouble(key, defaultValue); }
-    public boolean getAttributeAsBoolean(String key)                        { return commonInfo.getAttributeAsBoolean(key); }
     public boolean getAttributeAsBoolean(String key, boolean  defaultValue)  { return commonInfo.getAttributeAsBoolean(key, defaultValue); }
-
-    public Integer getAttributeAsIntegerNoException(String key)  { return commonInfo.getAttributeAsIntegerNoException(key); }
-    public Double getAttributeAsDoubleNoException(String key)    { return commonInfo.getAttributeAsDoubleNoException(key); }
-    public String getAttributeAsStringNoException(String key)    { return commonInfo.getAttributeAsStringNoException(key); }
-    public Boolean getAttributeAsBooleanNoException(String key)  { return commonInfo.getAttributeAsBooleanNoException(key); }
-
 
     // ---------------------------------------------------------------------------------------------------------
     //
@@ -645,17 +687,6 @@ public class VariantContext implements Feature { // to enable tribble intergrati
         return ref;
     }
 
-    /** Private helper routine that grabs the reference allele but doesn't throw an error if there's no such allele */
-
-//    private Allele getReferenceWithoutError() {
-//        for ( Allele allele : getAlleles() ) {
-//            if ( allele.isReference() ) {
-//                return allele;
-//            }
-//        }
-//
-//        return null;
-//    }
 
     /**
      * @return true if the context is strictly bi-allelic
@@ -712,7 +743,7 @@ public class VariantContext implements Feature { // to enable tribble intergrati
      *
      * @return the set of alleles
      */
-    public Set<Allele> getAlleles() { return alleles; }
+    public List<Allele> getAlleles() { return alleles; }
 
     /**
      * Gets the alternate alleles.  This method should return all the alleles present at the location,
@@ -721,14 +752,8 @@ public class VariantContext implements Feature { // to enable tribble intergrati
      *
      * @return the set of alternate alleles
      */
-    public Set<Allele> getAlternateAlleles() {
-        LinkedHashSet<Allele> altAlleles = new LinkedHashSet<Allele>();
-        for ( Allele allele : alleles ) {
-            if ( allele.isNonReference() )
-                altAlleles.add(allele);
-        }
-
-        return Collections.unmodifiableSet(altAlleles);
+    public List<Allele> getAlternateAlleles() {
+        return alleles.subList(1, alleles.size());
     }
 
     /**
@@ -755,14 +780,29 @@ public class VariantContext implements Feature { // to enable tribble intergrati
      * @throws IllegalArgumentException if i is invalid
      */
     public Allele getAlternateAllele(int i) {
-        int n = 0;
+        return alleles.get(i+1);
+    }
 
-        for ( Allele allele : alleles ) {
-            if ( allele.isNonReference() && n++ == i )
-                return allele;
+    /**
+     * @param  other  VariantContext whose alternate alleles to compare against
+     * @return true if this VariantContext has the same alternate alleles as other,
+     *         regardless of ordering. Otherwise returns false.
+     */
+    public boolean hasSameAlternateAllelesAs ( VariantContext other ) {
+        List<Allele> thisAlternateAlleles = getAlternateAlleles();
+        List<Allele> otherAlternateAlleles = other.getAlternateAlleles();
+
+        if ( thisAlternateAlleles.size() != otherAlternateAlleles.size() ) {
+            return false;
         }
 
-        throw new IllegalArgumentException("Requested " + i + " alternative allele but there are only " + n + " alternative alleles " + this);
+        for ( Allele allele : thisAlternateAlleles ) {
+            if ( ! otherAlternateAlleles.contains(allele) ) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -772,8 +812,11 @@ public class VariantContext implements Feature { // to enable tribble intergrati
     // ---------------------------------------------------------------------------------------------------------
 
     private void loadGenotypes() {
-        if ( !hasAttribute(UNPARSED_GENOTYPE_MAP_KEY) )
+        if ( !hasAttribute(UNPARSED_GENOTYPE_MAP_KEY) ) {
+            if ( genotypes == null )
+                genotypes = NO_GENOTYPES;
             return;
+        }
 
         Object parserObj = getAttribute(UNPARSED_GENOTYPE_PARSER_KEY);
         if ( parserObj == null || !(parserObj instanceof VCFParser) )
@@ -856,7 +899,10 @@ public class VariantContext implements Feature { // to enable tribble intergrati
 
         for ( String name : sampleNames ) {
             if ( map.containsKey(name) ) throw new IllegalArgumentException("Duplicate names detected in requested samples " + sampleNames);
-            map.put(name, getGenotype(name));
+            final Genotype g = getGenotype(name);
+            if ( g != null ) {
+                map.put(name, g);
+            }
         }
 
         return map;
@@ -925,7 +971,7 @@ public class VariantContext implements Feature { // to enable tribble intergrati
      * @return true if it's monomorphic
      */
     public boolean isMonomorphic() {
-        return ! isVariant() || getChromosomeCount(getReference()) == getChromosomeCount();
+        return ! isVariant() || (hasGenotypes() && getHomRefCount() + getNoCallCount() == getNSamples());
     }
 
     /**
@@ -952,7 +998,7 @@ public class VariantContext implements Feature { // to enable tribble intergrati
                 else if ( g.isHomVar() )
                     genotypeCounts[Genotype.Type.HOM_VAR.ordinal()]++;
                 else
-                    throw new IllegalStateException("Genotype of unknown type: " + g);
+                    genotypeCounts[Genotype.Type.MIXED.ordinal()]++;
             }
         }
     }
@@ -996,6 +1042,15 @@ public class VariantContext implements Feature { // to enable tribble intergrati
         return genotypeCounts[Genotype.Type.HOM_VAR.ordinal()];
     }
 
+    /**
+     * Genotype-specific functions -- how many mixed calls are there in the genotypes?
+     *
+     * @return number of mixed calls
+     */
+    public int getMixedCount() {
+        return genotypeCounts[Genotype.Type.MIXED.ordinal()];
+    }
+
     // ---------------------------------------------------------------------------------------------------------
     //
     // validation: extra-strict validation routines for paranoid users
@@ -1006,11 +1061,12 @@ public class VariantContext implements Feature { // to enable tribble intergrati
      * Run all extra-strict validation tests on a Variant Context object
      *
      * @param reference        the true reference allele
+     * @param paddedRefBase    the reference base used for padding indels
      * @param rsIDs            the true dbSNP IDs
      */
-    public void extraStrictValidation(Allele reference, Set<String> rsIDs) {
+    public void extraStrictValidation(Allele reference, Byte paddedRefBase, Set<String> rsIDs) {
         // validate the reference
-        validateReferenceBases(reference);
+        validateReferenceBases(reference, paddedRefBase);
 
         // validate the RS IDs
         validateRSIDs(rsIDs);
@@ -1025,10 +1081,15 @@ public class VariantContext implements Feature { // to enable tribble intergrati
         //checkReferenceTrack();
     }
 
-    public void validateReferenceBases(Allele reference) {
-        // don't validate if we're an insertion
-        if ( !reference.isNull() && !reference.basesMatch(getReference()) ) {
-            throw new TribbleException.InternalCodecException(String.format("the REF allele is incorrect for the record at position %s:%d, %s vs. %s", getChr(), getStart(), reference.getBaseString(), getReference().getBaseString()));
+    public void validateReferenceBases(Allele reference, Byte paddedRefBase) {
+        // don't validate if we're a complex event
+        if ( !isComplexIndel() && !reference.isNull() && !reference.basesMatch(getReference()) ) {
+            throw new TribbleException.InternalCodecException(String.format("the REF allele is incorrect for the record at position %s:%d, fasta says %s vs. VCF says %s", getChr(), getStart(), reference.getBaseString(), getReference().getBaseString()));
+        }
+
+        // we also need to validate the padding base for simple indels
+        if ( hasReferenceBaseForIndel() && !getReferenceBaseForIndel().equals(paddedRefBase) ) {
+            throw new TribbleException.InternalCodecException(String.format("the padded REF base is incorrect for the record at position %s:%d, fasta says %s vs. VCF says %s", getChr(), getStart(), (char)paddedRefBase.byteValue(), (char)getReferenceBaseForIndel().byteValue()));
         }
     }
 
@@ -1045,7 +1106,7 @@ public class VariantContext implements Feature { // to enable tribble intergrati
         if ( !hasGenotypes() )
             return;
 
-        Set<Allele> reportedAlleles = getAlleles();
+        List<Allele> reportedAlleles = getAlleles();
         Set<Allele> observedAlleles = new HashSet<Allele>();
         observedAlleles.add(getReference());
         for ( Genotype g : getGenotypes().values() ) {
@@ -1137,6 +1198,7 @@ public class VariantContext implements Feature { // to enable tribble intergrati
 
     private boolean validate(boolean throwException) {
         try {
+            validateReferencePadding();
             validateAlleles();
             validateGenotypes();
         } catch ( IllegalArgumentException e ) {
@@ -1147,6 +1209,16 @@ public class VariantContext implements Feature { // to enable tribble intergrati
         }
 
         return true;
+    }
+
+    private void validateReferencePadding() {
+        if (hasSymbolicAlleles()) // symbolic alleles don't need padding...
+            return;
+
+        boolean needsPadding = (getReference().length() == getEnd() - getStart()); // off by one because padded base was removed
+
+        if ( needsPadding && !hasReferenceBaseForIndel() )
+            throw new ReviewedStingException("Badly formed variant context at location " + getChr() + ":" + getStart() + "; no padded reference base was provided.");
     }
 
     private void validateAlleles() {
@@ -1192,9 +1264,11 @@ public class VariantContext implements Feature { // to enable tribble intergrati
 
             if ( ! name.equals(g.getSampleName()) ) throw new IllegalStateException("Bound sample name " + name + " does not equal the name of the genotype " + g.getSampleName());
 
-            for ( Allele gAllele : g.getAlleles() ) {
-                if ( ! hasAllele(gAllele) && gAllele.isCalled() )
-                    throw new IllegalStateException("Allele in genotype " + gAllele + " not in the variant context " + alleles);
+            if ( g.isAvailable() ) {
+                for ( Allele gAllele : g.getAlleles() ) {
+                    if ( ! hasAllele(gAllele) && gAllele.isCalled() )
+                        throw new IllegalStateException("Allele in genotype " + gAllele + " not in the variant context " + alleles);
+                }
             }
         }
     }
@@ -1204,16 +1278,6 @@ public class VariantContext implements Feature { // to enable tribble intergrati
     // utility routines
     //
     // ---------------------------------------------------------------------------------------------------------
-
-    // the indel base that gets stripped off for indels
-    public boolean hasReferenceBaseForIndel() {
-        return hasAttribute(REFERENCE_BASE_FOR_INDEL_KEY);
-    }
-
-    // the indel base that gets stripped off for indels
-    public byte getReferenceBaseForIndel() {
-        return hasReferenceBaseForIndel() ? (Byte)getAttribute(REFERENCE_BASE_FOR_INDEL_KEY) : (byte)'N';
-    }
 
     private void determineType() {
         if ( type == null ) {
@@ -1292,17 +1356,34 @@ public class VariantContext implements Feature { // to enable tribble intergrati
     }
 
     // protected basic manipulation routines
-    private static LinkedHashSet<Allele> alleleCollectionToSet(LinkedHashSet<Allele> dest, Collection<Allele> alleles) {
-        for ( Allele a : alleles ) {
-            for ( Allele b : dest ) {
+    private static List<Allele> makeAlleles(Collection<Allele> alleles) {
+        final List<Allele> alleleList = new ArrayList<Allele>(alleles.size());
+
+        boolean sawRef = false;
+        for ( final Allele a : alleles ) {
+            for ( final Allele b : alleleList ) {
                 if ( a.equals(b, true) )
                     throw new IllegalArgumentException("Duplicate allele added to VariantContext: " + a);
             }
 
-            dest.add(a);
+            // deal with the case where the first allele isn't the reference
+            if ( a.isReference() ) {
+                if ( sawRef )
+                    throw new IllegalArgumentException("Alleles for a VariantContext must contain at most one reference allele: " + alleles);
+                alleleList.add(0, a);
+                sawRef = true;
+            }
+            else
+                alleleList.add(a);
         }
 
-        return dest;
+        if ( alleleList.isEmpty() )
+            throw new IllegalArgumentException("Cannot create a VariantContext with an empty allele list");
+
+        if ( alleleList.get(0).isNonReference() )
+            throw new IllegalArgumentException("Alleles for a VariantContext must contain at least one reference allele: " + alleles);
+
+        return alleleList;
     }
 
     public static Map<String, Genotype> genotypeCollectionToMap(Map<String, Genotype> dest, Collection<Genotype> genotypes) {
@@ -1332,8 +1413,16 @@ public class VariantContext implements Feature { // to enable tribble intergrati
         return (int)stop;
     }
 
-    public static VariantContext createVariantContextWithPaddedAlleles(VariantContext inputVC, byte inputRefBase, boolean refBaseShouldBeAppliedToEndOfAlleles) {
-        Allele refAllele = inputVC.getReference();
+    private boolean hasSymbolicAlleles() {
+        for (Allele a: getAlleles()) {
+            if (a.isSymbolic()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static VariantContext createVariantContextWithPaddedAlleles(VariantContext inputVC, boolean refBaseShouldBeAppliedToEndOfAlleles) {
 
         // see if we need to pad common reference base from all alleles
         boolean padVC;
@@ -1341,31 +1430,22 @@ public class VariantContext implements Feature { // to enable tribble intergrati
         // We need to pad a VC with a common base if the length of the reference allele is less than the length of the VariantContext.
         // This happens because the position of e.g. an indel is always one before the actual event (as per VCF convention).
         long locLength = (inputVC.getEnd() - inputVC.getStart()) + 1;
-        if (refAllele.length() == locLength)
+        if (inputVC.hasSymbolicAlleles())
+            padVC = true;
+        else if (inputVC.getReference().length() == locLength)
             padVC = false;
-        else if (refAllele.length() == locLength-1)
+        else if (inputVC.getReference().length() == locLength-1)
             padVC = true;
         else throw new IllegalArgumentException("Badly formed variant context at location " + String.valueOf(inputVC.getStart()) +
                     " in contig " + inputVC.getChr() + ". Reference length must be at most one base shorter than location size");
 
-
         // nothing to do if we don't need to pad bases
         if (padVC) {
-            Byte refByte;
 
-            Map<String,Object> attributes = inputVC.getAttributes();
+            if ( !inputVC.hasReferenceBaseForIndel() )
+                throw new ReviewedStingException("Badly formed variant context at location " + inputVC.getChr() + ":" + inputVC.getStart() + "; no padded reference base is available.");
 
-            // upper-case for consistency; note that we can safely make these casts because the input is constrained to be a byte
-            inputRefBase = (byte)Character.toUpperCase((char)inputRefBase);
-            if (attributes.containsKey(VariantContext.REFERENCE_BASE_FOR_INDEL_KEY))
-                refByte = (Byte)attributes.get(VariantContext.REFERENCE_BASE_FOR_INDEL_KEY);
-            else if (inputRefBase == 'A' || inputRefBase == 'T' || inputRefBase == 'C' || inputRefBase == 'G' || inputRefBase == 'N')
-                refByte = inputRefBase;
-            else
-                throw new IllegalArgumentException("Error when trying to pad Variant Context at location " + String.valueOf(inputVC.getStart())
-                        + " in contig " + inputVC.getChr() +
-                        ". Either input reference base ("+(char)inputRefBase+
-                        ", ascii code="+inputRefBase+") must be a regular base, or input VC must contain reference base key");
+            Byte refByte = inputVC.getReferenceBaseForIndel();
 
             List<Allele> alleles = new ArrayList<Allele>();
             Map<String, Genotype> genotypes = new TreeMap<String, Genotype>();
@@ -1417,11 +1497,7 @@ public class VariantContext implements Feature { // to enable tribble intergrati
 
             // Do not change the filter state if filters were not applied to this context
             Set<String> inputVCFilters = inputVC.filtersWereAppliedToContext ? inputVC.getFilters() : null;
-            return new VariantContext(inputVC.getSource(), inputVC.getChr(), inputVC.getStart(), inputVC.getEnd(), alleles, genotypes, inputVC.getNegLog10PError(),
-                    inputVCFilters, attributes);
-
-
-
+            return new VariantContext(inputVC.getSource(), inputVC.getChr(), inputVC.getStart(), inputVC.getEnd(), alleles, genotypes, inputVC.getNegLog10PError(), inputVCFilters, inputVC.getAttributes(),refByte);
         }
         else
             return inputVC;

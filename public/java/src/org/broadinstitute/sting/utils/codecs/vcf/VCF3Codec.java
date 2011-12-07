@@ -7,15 +7,31 @@ import org.broadinstitute.sting.utils.variantcontext.Allele;
 import org.broadinstitute.sting.utils.variantcontext.Genotype;
 import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
+import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.util.*;
 
 
 /**
- * a feature codec for the VCF 3 specification.  Our aim is to read in the records and convert to VariantContext as
- * quickly as possible, relying on VariantContext to do the validation of any contradictory (or malformed) record parameters.
+ * A feature codec for the VCF3 specification, to read older VCF files.  VCF3 has been
+ * depreciated in favor of VCF4 (See VCF codec for the latest information)
+ *
+ * <p>
+ * Reads historical VCF3 encoded files (1000 Genomes Pilot results, for example)
+ * </p>
+ *
+ * <p>
+ * See also: @see <a href="http://vcftools.sourceforge.net/specs.html">VCF specification</a><br>
+ * See also: @see <a href="http://www.ncbi.nlm.nih.gov/pubmed/21653522">VCF spec. publication</a>
+ * </p>
+ *
+ * @author Mark DePristo
+ * @since 2010
  */
 public class VCF3Codec extends AbstractVCFCodec {
+    public final static String VCF3_MAGIC_HEADER = "##fileformat=VCFv3";
+
 
     /**
      * @param reader the line reader to take header lines from
@@ -141,8 +157,6 @@ public class VCF3Codec extends AbstractVCFCodec {
                     boolean missing = i >= GTValueSplitSize;
 
                     if (gtKey.equals(VCFConstants.GENOTYPE_KEY)) {
-                        if (i != 0)
-                            generateException("Saw GT at position " + i + ", but it must be at the first position for genotypes");
                         genotypeAlleleLocation = i;
                     } else if (gtKey.equals(VCFConstants.GENOTYPE_QUALITY_KEY)) {
                         GTQual = missing ? parseQual(VCFConstants.MISSING_VALUE_v4) : parseQual(GTValueArray[i]);
@@ -156,12 +170,13 @@ public class VCF3Codec extends AbstractVCFCodec {
                 }
             }
 
-            // check to make sure we found a gentoype field
-            if (genotypeAlleleLocation < 0) generateException("Unable to find required field GT for the record; we don't yet support a missing GT field");
+            // check to make sure we found a genotype field
+            if ( genotypeAlleleLocation < 0 )
+                generateException("Unable to find the GT field for the record; the GT field is required");
+            if ( genotypeAlleleLocation > 0 )
+                generateException("Saw GT field at position " + genotypeAlleleLocation + ", but it must be at the first position for genotypes");
 
-            // todo -- assuming allele list length in the single digits is bad.  Fix me.
-            // Check for > 1 for haploid genotypes
-            boolean phased = GTValueArray[genotypeAlleleLocation].length() > 1 && GTValueArray[genotypeAlleleLocation].charAt(1) == '|';
+            boolean phased = GTValueArray[genotypeAlleleLocation].indexOf(VCFConstants.PHASED) != -1;
 
             // add it to the list
             try {
@@ -179,4 +194,8 @@ public class VCF3Codec extends AbstractVCFCodec {
         return genotypes;
     }
 
+    @Override
+    public boolean canDecode(final File potentialInput) {
+        return canDecodeFile(potentialInput, VCF3_MAGIC_HEADER);
+    }
 }

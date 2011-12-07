@@ -25,11 +25,9 @@
 
 package org.broadinstitute.sting.gatk.filters;
 
-import net.sf.picard.filter.SamRecordFilter;
 import net.sf.samtools.SAMRecord;
-
-import org.broadinstitute.sting.utils.sam.ReadUtils;
 import org.broadinstitute.sting.commandline.Argument;
+import org.broadinstitute.sting.utils.sam.ReadUtils;
 
 /**
  * Filter out PL matching reads.
@@ -38,7 +36,7 @@ import org.broadinstitute.sting.commandline.Argument;
  * @version 0.1
  */
 public class PlatformFilter extends ReadFilter {
-    @Argument(fullName = "PLFilterName", shortName = "PLFilterName", doc="Discard reads with RG:PL attribute containing this strign", required=false)
+    @Argument(fullName = "PLFilterName", shortName = "PLFilterName", doc="Discard reads with RG:PL attribute containing this string", required=false)
     protected String[] PLFilterNames;
 
     public boolean filterOut(SAMRecord rec) {

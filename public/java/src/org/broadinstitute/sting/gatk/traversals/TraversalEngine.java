@@ -25,11 +25,11 @@
 package org.broadinstitute.sting.gatk.traversals;
 
 import org.apache.log4j.Logger;
+import org.broadinstitute.sting.gatk.GenomeAnalysisEngine;
+import org.broadinstitute.sting.gatk.ReadMetrics;
 import org.broadinstitute.sting.gatk.datasources.providers.ShardDataProvider;
 import org.broadinstitute.sting.gatk.datasources.reads.Shard;
 import org.broadinstitute.sting.gatk.walkers.Walker;
-import org.broadinstitute.sting.gatk.ReadMetrics;
-import org.broadinstitute.sting.gatk.GenomeAnalysisEngine;
 import org.broadinstitute.sting.utils.*;
 import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
 import org.broadinstitute.sting.utils.exceptions.UserException;
@@ -38,7 +38,10 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.PrintStream;
-import java.util.*;
+import java.util.Arrays;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
 
 public abstract class TraversalEngine<M,T,WalkerType extends Walker<M,T>,ProviderType extends ShardDataProvider> {
     // Time in milliseconds since we initialized this engine
@@ -112,12 +115,13 @@ public abstract class TraversalEngine<M,T,WalkerType extends Walker<M,T>,Provide
     LinkedList<ProcessingHistory> history = new LinkedList<ProcessingHistory>();
 
     /** We use the SimpleTimer to time our run */
-    private SimpleTimer timer = new SimpleTimer("Traversal");
+    private SimpleTimer timer = null;
 
     // How long can we go without printing some progress info?
     private static final int PRINT_PROGRESS_CHECK_FREQUENCY_IN_CYCLES = 1000;
     private int printProgressCheckCounter = 0;
     private long lastProgressPrintTime = -1;                       // When was the last time we printed progress log?
+    private long MIN_ELAPSED_TIME_BEFORE_FIRST_PROGRESS = 120 * 1000; // in milliseconds
     private long PROGRESS_PRINT_FREQUENCY = 10 * 1000;             // in milliseconds
     private final double TWO_HOURS_IN_SECONDS = 2.0 * 60.0 * 60.0;
     private final double TWELVE_HOURS_IN_SECONDS = 12.0 * 60.0 * 60.0;
@@ -206,11 +210,16 @@ public abstract class TraversalEngine<M,T,WalkerType extends Walker<M,T>,Provide
         }
     }
     /**
-     * Should be called to indicate that we're going to process records and the timer should start ticking
+     * Should be called to indicate that we're going to process records and the timer should start ticking.  This
+     * function should be called right before any traversal work is done, to avoid counting setup costs in the
+     * processing costs and inflating the estimated runtime.
      */
-    public void startTimers() {
-        timer.start();
-        lastProgressPrintTime = timer.currentTime();
+    public void startTimersIfNecessary() {
+        if ( timer == null ) {
+            timer = new SimpleTimer("Traversal");
+            timer.start();
+            lastProgressPrintTime = timer.currentTime();
+        }
     }
 
     /**
@@ -221,7 +230,8 @@ public abstract class TraversalEngine<M,T,WalkerType extends Walker<M,T>,Provide
      * @return true if the maximum interval (in millisecs) has passed since the last printing
      */
     private boolean maxElapsedIntervalForPrinting(final long curTime, long lastPrintTime, long printFreq) {
-        return (curTime - lastPrintTime) > printFreq;
+        long elapsed = curTime - lastPrintTime;
+        return elapsed > printFreq && elapsed > MIN_ELAPSED_TIME_BEFORE_FIRST_PROGRESS;
     }
 
     /**
@@ -348,14 +358,14 @@ public abstract class TraversalEngine<M,T,WalkerType extends Walker<M,T>,Provide
     public void printOnTraversalDone() {
         printProgress(null, null, true);
 
-        final double elapsed = timer.getElapsedTime();
+        final double elapsed = timer == null ? 0 : timer.getElapsedTime();
 
         ReadMetrics cumulativeMetrics = engine.getCumulativeMetrics();        
 
         // count up the number of skipped reads by summing over all filters
         long nSkippedReads = 0L;
-        for ( Map.Entry<Class, Long> countsByFilter: cumulativeMetrics.getCountsByFilter().entrySet())
-            nSkippedReads += countsByFilter.getValue();
+        for ( final long countsByFilter : cumulativeMetrics.getCountsByFilter().values())
+            nSkippedReads += countsByFilter;
 
         logger.info(String.format("Total runtime %.2f secs, %.2f min, %.2f hours", elapsed, elapsed / 60, elapsed / 3600));
         if ( cumulativeMetrics.getNumReadsSeen() > 0 )
@@ -363,10 +373,10 @@ public abstract class TraversalEngine<M,T,WalkerType extends Walker<M,T>,Provide
                     nSkippedReads,
                     cumulativeMetrics.getNumReadsSeen(),
                     100.0 * MathUtils.ratio(nSkippedReads,cumulativeMetrics.getNumReadsSeen())));
-        for ( Map.Entry<Class, Long> filterCounts : cumulativeMetrics.getCountsByFilter().entrySet() ) {
+        for ( Map.Entry<String, Long> filterCounts : cumulativeMetrics.getCountsByFilter().entrySet() ) {
             long count = filterCounts.getValue();
             logger.info(String.format("  -> %d reads (%.2f%% of total) failing %s",
-                    count, 100.0 * MathUtils.ratio(count,cumulativeMetrics.getNumReadsSeen()), Utils.getClassName(filterCounts.getKey())));
+                    count, 100.0 * MathUtils.ratio(count,cumulativeMetrics.getNumReadsSeen()), filterCounts.getKey()));
         }
 
         if ( performanceLog != null ) performanceLog.close();

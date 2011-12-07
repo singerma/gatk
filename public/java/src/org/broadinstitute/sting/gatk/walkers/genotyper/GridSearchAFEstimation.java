@@ -26,18 +26,18 @@
 package org.broadinstitute.sting.gatk.walkers.genotyper;
 
 import org.apache.log4j.Logger;
-import org.broadinstitute.sting.utils.variantcontext.Genotype;
-import org.broadinstitute.sting.utils.variantcontext.Allele;
-import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 import org.broadinstitute.sting.gatk.contexts.ReferenceContext;
 import org.broadinstitute.sting.gatk.refdata.RefMetaDataTracker;
+import org.broadinstitute.sting.utils.MathUtils;
 import org.broadinstitute.sting.utils.collections.Pair;
 import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
-import org.broadinstitute.sting.utils.MathUtils;
 import org.broadinstitute.sting.utils.exceptions.UserException;
+import org.broadinstitute.sting.utils.variantcontext.Allele;
+import org.broadinstitute.sting.utils.variantcontext.Genotype;
+import org.broadinstitute.sting.utils.variantcontext.VariantContext;
 
-import java.util.*;
 import java.io.PrintStream;
+import java.util.*;
 
 public class GridSearchAFEstimation extends AlleleFrequencyCalculationModel {
 
@@ -52,9 +52,7 @@ public class GridSearchAFEstimation extends AlleleFrequencyCalculationModel {
         AFMatrix = new AlleleFrequencyMatrix(N);
     }
 
-    protected void getLog10PNonRef(RefMetaDataTracker tracker,
-                                   ReferenceContext ref,
-                                   Map<String, Genotype> GLs, Set<Allele>alleles,
+    protected void getLog10PNonRef(Map<String, Genotype> GLs, List<Allele> alleles,
                                    double[] log10AlleleFrequencyPriors,
                                    double[] log10AlleleFrequencyPosteriors) {
         initializeAFMatrix(GLs);

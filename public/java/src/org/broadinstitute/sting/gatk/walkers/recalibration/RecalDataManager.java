@@ -25,19 +25,22 @@
 
 package org.broadinstitute.sting.gatk.walkers.recalibration;
 
+import net.sf.samtools.SAMReadGroupRecord;
+import net.sf.samtools.SAMRecord;
+import net.sf.samtools.SAMUtils;
 import org.broadinstitute.sting.gatk.GenomeAnalysisEngine;
+import org.broadinstitute.sting.utils.BaseUtils;
+import org.broadinstitute.sting.utils.Utils;
+import org.broadinstitute.sting.utils.collections.NestedHashMap;
 import org.broadinstitute.sting.utils.exceptions.ReviewedStingException;
 import org.broadinstitute.sting.utils.exceptions.UserException;
-import org.broadinstitute.sting.utils.sam.GATKSAMRecord;
 import org.broadinstitute.sting.utils.sam.AlignmentUtils;
-import org.broadinstitute.sting.utils.*;
-import org.broadinstitute.sting.utils.collections.NestedHashMap;
+import org.broadinstitute.sting.utils.sam.GATKSAMReadGroupRecord;
+import org.broadinstitute.sting.utils.sam.GATKSAMRecord;
 
-import java.util.*;
-
-import net.sf.samtools.SAMRecord;
-import net.sf.samtools.SAMReadGroupRecord;
-import net.sf.samtools.SAMUtils;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Created by IntelliJ IDEA.
@@ -64,15 +67,22 @@ public class RecalDataManager {
     private static boolean warnUserNullPlatform = false;
 
     public enum SOLID_RECAL_MODE {
+        /** Treat reference inserted bases as reference matching bases. Very unsafe! */
         DO_NOTHING,
+        /** Set reference inserted bases and the previous base (because of color space alignment details) to Q0. This is the default option. */
         SET_Q_ZERO,
+        /** In addition to setting the quality scores to zero, also set the base itself to 'N'. This is useful to visualize in IGV. */
         SET_Q_ZERO_BASE_N,
+        /** Look at the color quality scores and probabilistically decide to change the reference inserted base to be the base which is implied by the original color space instead of the reference. */
         REMOVE_REF_BIAS
     }
 
     public enum SOLID_NOCALL_STRATEGY {
+        /** When a no call is detected throw an exception to alert the user that recalibrating this SOLiD data is unsafe. This is the default option. */
         THROW_EXCEPTION,
+        /** Leave the read in the output bam completely untouched. This mode is only okay if the no calls are very rare. */
         LEAVE_READ_UNRECALIBRATED,
+        /** Mark these reads as failing vendor quality checks so they can be filtered out by downstream analyses. */
         PURGE_READ
     }
 
@@ -219,8 +229,7 @@ public class RecalDataManager {
      * @param RAC The list of shared command line arguments
      */
     public static void parseSAMRecord( final SAMRecord read, final RecalibrationArgumentCollection RAC ) {
-
-        SAMReadGroupRecord readGroup = read.getReadGroup();
+        GATKSAMReadGroupRecord readGroup = ((GATKSAMRecord)read).getReadGroup();
 
         // If there are no read groups we have to default to something, and that something could be specified by the user using command line arguments
         if( readGroup == null ) {
@@ -232,18 +241,17 @@ public class RecalDataManager {
                     warnUserNullReadGroup = true;
                 }
                 // There is no readGroup so defaulting to these values
-                readGroup = new SAMReadGroupRecord( RAC.DEFAULT_READ_GROUP );
+                readGroup = new GATKSAMReadGroupRecord( RAC.DEFAULT_READ_GROUP );
                 readGroup.setPlatform( RAC.DEFAULT_PLATFORM );
                 ((GATKSAMRecord)read).setReadGroup( readGroup );
             } else {
-                throw new UserException.MalformedBAM(read, "The input .bam file contains reads with no read group. First observed at read with name = " + read.getReadName() +
-                                         " Users must set both the default read group using the --default_read_group <String> argument and the default platform using the --default_platform <String> argument." );
+                throw new UserException.MalformedBAM(read, "The input .bam file contains reads with no read group. First observed at read with name = " + read.getReadName() );
             }
         }
 
         if( RAC.FORCE_READ_GROUP != null && !readGroup.getReadGroupId().equals(RAC.FORCE_READ_GROUP) ) { // Collapse all the read groups into a single common String provided by the user
             final String oldPlatform = readGroup.getPlatform();
-            readGroup = new SAMReadGroupRecord( RAC.FORCE_READ_GROUP );
+            readGroup = new GATKSAMReadGroupRecord( RAC.FORCE_READ_GROUP );
             readGroup.setPlatform( oldPlatform );
             ((GATKSAMRecord)read).setReadGroup( readGroup );
         }
@@ -262,8 +270,7 @@ public class RecalDataManager {
                 }
                 readGroup.setPlatform( RAC.DEFAULT_PLATFORM );
             } else {
-                throw new UserException.MalformedBAM(read, "The input .bam file contains reads with no platform information. First observed at read with name = " + read.getReadName() +
-                                         " Users must set the default platform using the --default_platform <String> argument." );
+                throw new UserException.MalformedBAM(read, "The input .bam file contains reads with no platform information. First observed at read with name = " + read.getReadName() );
             }
         }
     }
