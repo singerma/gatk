@@ -207,6 +207,7 @@ public class VCFUtils {
      * @param logger    logger to hold warning
      */
     private static void mergeCompoundHeaderLine(Map<String, VCFHeaderLine> map, String key, VCFHeaderLine line, Logger logger) throws IllegalStateException {
+        HeaderConflictWarner conflictWarner = new HeaderConflictWarner(logger);
         VCFHeaderLine other = map.get(key);
         if(line.equals(other))
             return;
@@ -219,15 +220,15 @@ public class VCFUtils {
         VCFCompoundHeaderLine compOther = (VCFCompoundHeaderLine)other;
 
         if(compLine.getCount() != compOther.getCount()) {
-            if ( logger != null ) logger.warn("Promoting header field Number to . due to number differences in header lines: " + line + " " + other);
+            if ( logger != null ) conflictWarner.warn(line, "Promoting header field Number to . due to number differences in header lines: " + line + " " + other);
             compOther.setNumberToUnbounded();
         }
 
         if (compLine.getType() != (compOther.getType())) {
             if ( compLine.getType() == VCFHeaderLineType.Integer && compOther.getType() == VCFHeaderLineType.Float ) {
-                if ( logger != null ) logger.warn("Promoting Integer to Float in header: " + compLine);
+                if ( logger != null ) conflictWarner.warn(line, "Promoting Integer to Float in header: " + compLine);
             } else if ( compLine.getType() == VCFHeaderLineType.Float && compOther.getType() == VCFHeaderLineType.Integer ) {
-                if ( logger != null ) logger.warn("Promoting Integer to Float in header: " + compOther);
+                if ( logger != null ) conflictWarner.warn(line, "Promoting Integer to Float in header: " + compOther);
                 compOther.promoteIntToFloat();
             } else {
                 throw new IllegalStateException("Incompatible header types, collision between these two types: " + line + " " + other );
@@ -235,7 +236,7 @@ public class VCFUtils {
         }
 
         if (!compLine.getDescription().equals(compOther.getDescription()))
-            if ( logger != null ) logger.warn("Allowing unequal description fields through: keeping " + compOther + " excluding " + compLine);
+            if ( logger != null ) conflictWarner.warn(line, "Allowing unequal description fields through: keeping " + compOther + " excluding " + compLine);
 
     }
 
@@ -275,6 +276,7 @@ public class VCFUtils {
      * @throws IllegalStateException    generic exception if anything goes wrong
      */
     public static Set<VCFHeaderLine> tcgaMergeHeaders(Map<String, VCFHeader> vcfRods, Logger logger) throws IllegalStateException {
+        HeaderConflictWarner conflictWarner = new HeaderConflictWarner(logger);
         HashMap<String, VCFHeaderLine> map = new HashMap<String, VCFHeaderLine>();
         HashMap<String, VCFHeaderLine> infoMap = new HashMap<String, VCFHeaderLine>();
         HashMap<String, VCFHeaderLine> filterMap = new HashMap<String, VCFHeaderLine>();
@@ -407,7 +409,7 @@ public class VCFUtils {
                         if(line.equals(other))
                             continue;
                         else {
-                            if ( logger != null ) logger.warn("Ignoring header line already in map: this header line = " + line + " already present header = " + other);
+                            if ( logger != null ) conflictWarner.warn(line, "Ignoring header line already in map: this header line = " + line + " already present header = " + other);
                             continue;
                         }
 
