@@ -176,6 +176,8 @@ public class CombineVariants extends RodWalker<Integer, Integer> {
             SET_KEY = null;
 
         Set<VCFHeaderLine> headerLines = VCFUtils.tcgaMergeHeaders(vcfRods, logger);
+        //hack to add in Quality INFO line, perhaps there is another place where all necessary additional info lines can be added
+        headerLines.add(new VCFInfoHeaderLine("Quality", VCFHeaderLineCount.UNBOUNDED, VCFHeaderLineType.String, "Comma delimited list of quality scores from original VCFs"));
         if ( SET_KEY != null )
             headerLines.add(new VCFInfoHeaderLine(SET_KEY, 1, VCFHeaderLineType.String, "Source VCF for the merged record in CombineVariants"));
         vcfWriter.writeHeader(new VCFHeader(headerLines, sitesOnlyVCF ? Collections.<String>emptySet() : samples));
