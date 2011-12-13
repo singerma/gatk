@@ -307,15 +307,19 @@ public class VCFUtils {
                         throw new IllegalStateException("Incompatible header type, not VCFNamedHeaderLine: " + line);
                 } else if(key.equals("FILTER")) {
                     if(line instanceof VCFFilterHeaderLine) {
-                        String filterKey = ((VCFFilterHeaderLine) line).getName();
+                        //create a new VCFFilterHeaderLine with the annotated name
+                        VCFFilterHeaderLine filterLine = (VCFFilterHeaderLine) line;
+                        VCFFilterHeaderLine newLine = new VCFFilterHeaderLine(filterLine.getName() + "." + name, filterLine.getDescription());
+
+                        String filterKey = newLine.getName();
                         if(filterMap.containsKey(filterKey)) {
                             VCFHeaderLine other = filterMap.get(filterKey);
-                            String lineName = ((VCFFilterHeaderLine) line).getName();
+                            String lineName = newLine.getName();
                             String otherName = ((VCFFilterHeaderLine) other).getName();
                             if ( !lineName.equals(otherName) )
-                                throw new IllegalStateException("Incompatible header types: " + line + " " + other );
+                                throw new IllegalStateException("Incompatible header types: " + newLine + " " + other );
                         } else
-                            filterMap.put(filterKey, line);
+                            filterMap.put(filterKey, newLine);
                     } else
                         throw new IllegalStateException("Incompatible header type, not VCFFilterHeaderLine: " + line);
                 } else if(key.equals("FORMAT")) {

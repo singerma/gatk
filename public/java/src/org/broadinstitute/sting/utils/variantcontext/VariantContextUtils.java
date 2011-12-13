@@ -559,7 +559,10 @@ public class VariantContextUtils {
 
             negLog10PError = Math.max(negLog10PError, vc.isVariant() ? vc.getNegLog10PError() : -1);
 
-            filters.addAll(vc.getFilters());
+            //annotate and add all filters
+            for(String filter: vc.getFilters()) {
+                filters.add(filter + "." + vc.getSource());
+            }
 
             //
             // add attributes
