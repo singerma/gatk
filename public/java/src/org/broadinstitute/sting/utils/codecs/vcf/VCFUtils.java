@@ -334,6 +334,73 @@ public class VCFUtils {
                     String sampleValue = insertCenter(line.getValue(), name);
                     String sampleKey = parseID(line.getValue()) + "." + name;
                     sampleMap.put(sampleKey, new VCFHeaderLine(key, sampleValue));
+                } else if(key.equals("vcfProcessLog")) {
+                    if(map.containsKey(key)) {
+                        //merge new information into vcfProcessLog
+                        String currentValue = line.getValue();
+                        if(currentValue.contains("InputVCF") &&
+                                currentValue.contains("InputVCFSource") &&
+                                currentValue.contains("InputVCFVer") &&
+                                currentValue.contains("InputVCFParam") &&
+                                currentValue.contains("InputVCFgeneAnno")) {
+                            VCFHeaderLine oldLine = map.get(key);
+                            String oldValue = oldLine.getValue();
+
+                            //original form should be
+                            /*
+                            ##vcfProcessLog=<InputVCF=<file1.vcf>, 
+                            InputVCFSource=<varCaller1>, 
+                            InputVCFVer=<1.0>, 
+                            InputVCFParam=<a1,c2>,
+                            InputVCFgeneAnno=<anno1.gaf>> 
+                             */
+                            String[] oldValueSplit = oldValue.split(">", 6);
+                            String[] currentValueSplit = currentValue.split("<|>", 12);
+                            
+                            /*
+                            oldValueSplit = ["<InputVCF=<file1.vcf", 
+                            ",InputVCFSource=<varCaller1", 
+                            ",InputVCFVer=<1.0",
+                            ",InputVCFParam=<a1,c2",
+                            ",InputVCFgeneAnno=<anno1.gaf", ""] 
+                              */
+                            
+                            /*
+                            currentValueSplit = ["", "InputVCF=", "file1.vcf", 
+                            ",InputVCFSource=", "varCaller1", 
+                            ",InputVCFVer=", "1.0",
+                            ",InputVCFParam=", "a1,c2",
+                            ",InputVCFgeneAnno=", "anno1.gaf", "", ""] 
+                             */
+                            
+                            String newValue = "" +
+                                oldValueSplit[0] + "," + currentValueSplit[2] + ">" +
+                                oldValueSplit[1] + "," + currentValueSplit[4] + ">" +
+                                oldValueSplit[2] + "," + currentValueSplit[6] + ">" +
+                                oldValueSplit[3] + "," + currentValueSplit[8] + ">" +
+                                oldValueSplit[4] + "," + currentValueSplit[10] + ">" +
+                                oldValueSplit[5] + ">";
+                            map.put(key, new VCFHeaderLine(key, newValue));
+                        } else {
+                            throw new IllegalStateException("Incompatible vcfProcessLog," +
+                                    "expected InputVCF, InputVCFSource, InputVCFVer, InputVCFParam," +
+                                    "and InputVCFgeneAnno but got " + currentValue);
+                        }
+                    } else {
+                        //add information about merging software
+                        String oldValue = line.getValue();
+                        if(oldValue.contains("InputVCF") &&
+                                oldValue.contains("InputVCFSource") &&
+                                oldValue.contains("InputVCFVer") &&
+                                oldValue.contains("InputVCFParam") &&
+                                oldValue.contains("InputVCFgeneAnno")) {
+                            map.put(key, line);
+                        } else {
+                            throw new IllegalStateException("Incompatible vcfProcessLog," +
+                                    "expected InputVCF, InputVCFSource, InputVCFVer, InputVCFParam," +
+                                    "and InputVCFgeneAnno but got " + oldValue);
+                        }
+                    }
                 } else {
                     if(map.containsKey(key)) {
                         VCFHeaderLine other = map.get(key);
